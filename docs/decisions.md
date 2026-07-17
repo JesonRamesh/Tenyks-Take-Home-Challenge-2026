@@ -304,3 +304,10 @@ Revised Phase 3 scope, in priority order:
    the accompanying-person policy before the next full eval run.
 7. P6-segment-3-style detector recall miss — separate, smaller,
    unrelated to the above.
+## Tooling — reproducible baseline eval
+
+`evaluate_baseline.py` scores `outputs/tracks.yaml` against
+`eval/label/kiosk_gt.yaml`, collapsing each person_id's repeat visits with the
+pipeline's own `collapse_segments` and calling the (untouched) eval harness. It
+regenerates `outputs/eval_report.csv` exactly, so the baseline number is
+reproducible from the repo rather than a scratch script.
