@@ -1,0 +1,5 @@
+device: mps
+frames: 216306
+elapsed_s: 2050.08
+fps: 105.51
+peak_vram_gb: 0.0

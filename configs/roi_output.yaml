@@ -1,0 +1,18 @@
+roi_reference:
+  video: digital_kiosk.mp4
+  frame_used: 108153
+  note: Polygon points are in pixel coordinates from this frame's resolution. If your
+    pipeline resizes frames before detection, scale these accordingly.
+roi_polygon:
+- - 408
+  - 681
+- - 704
+  - 332
+- - 1017
+  - 388
+- - 1007
+  - 716
+- - 413
+  - 716
+- - 407
+  - 682

@@ -1,0 +1,9 @@
+# Synthetic predictions. Chosen so matching and errors are hand-verifiable:
+#   T10 -> P1  IoU 0.900  dwell 90f = 9.0s   (err 1.0s)
+#   T11 -> P2  IoU 0.950  dwell 95f = 9.5s   (err 0.5s)
+#   T12 -> P3  IoU 0.833  dwell 50f = 5.0s   (err 1.0s)
+#   T13        spurious, no GT overlap -> unmatched, drives count_error = +1
+- {track_id: 10, enter_frame: 0, exit_frame: 90}
+- {track_id: 11, enter_frame: 55, exit_frame: 150}
+- {track_id: 12, enter_frame: 205, exit_frame: 255}
+- {track_id: 13, enter_frame: 300, exit_frame: 310}

@@ -1,0 +1,16 @@
+# local review/labelling tooling — not part of the pipeline deliverable
+label_gt.py
+validate_gt.py
+review_frames.py
+diagnose_baseline.py
+classify_tracks.py
+define_roi.py
+eval/label/no_overlap_review.yaml
+
+# large binaries and derived artifacts — not committed
+digital_kiosk.mp4
+yolov8n.pt
+
+# python caches
+__pycache__/
+.pytest_cache/

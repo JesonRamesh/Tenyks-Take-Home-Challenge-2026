@@ -1,0 +1,41 @@
+# Per-camera config for kiosk "cam1". Nothing here is tuned to any single clip;
+# the ROI describes the fixed camera's kiosk zone, shared by dev and test video.
+camera_id: cam1
+
+# Image-space polygon (pixels, 1280x720) enclosing the kiosk interaction zone:
+# the floor where people stand to use or queue for the self-order kiosks. A track
+# counts as "in the zone" only while its bottom-center anchor is inside.
+kiosk_roi:
+  roi_polygon:
+    - [408, 681]
+    - [704, 332]
+    - [1017, 388]
+    - [1007, 716]
+    - [413, 716]
+
+detector:
+  model: yolov8n
+  # Low feed threshold on purpose: ByteTrack's two-stage association relies on the
+  # low-confidence boxes, and does the real high/low gating via track_high_thresh.
+  confidence: 0.1
+  classes: [0] # COCO "person"
+  imgsz: 640
+  device: auto # cuda if available, else mps, else cpu
+
+tracker:
+  type: bytetrack
+  track_high_thresh: 0.5 # detections above this drive confident association
+  track_low_thresh: 0.1 # second-stage association floor
+  new_track_thresh: 0.6 # min score to spawn a brand-new track
+  match_thresh: 0.8 # IoU gate for association
+  track_buffer: 30 # frames a lost track survives before deletion
+  fuse_score: true
+
+dwell:
+  # A track's ROI presence splits into a new segment when its anchor leaves the ROI
+  # for more than this many frames ("left for good"); per-track segment durations
+  # are summed, mirroring how GT sums repeated visits under one person_id.
+  segment_gap_frames: 30
+
+eval:
+  min_iou: 0.5 # min temporal IoU for a predicted track to match a GT person

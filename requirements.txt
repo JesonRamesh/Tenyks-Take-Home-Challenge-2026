@@ -1,0 +1,8 @@
+numpy
+scipy
+pyyaml
+pytest
+torch
+ultralytics
+opencv-python
+lap

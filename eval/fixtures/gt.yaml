@@ -1,0 +1,5 @@
+# Synthetic ground truth. fps = 10, so dwell_frames / 10 = dwell seconds.
+# P1 dwell 100f = 10.0s, P2 100f = 10.0s, P3 60f = 6.0s.
+- {person_id: 1, enter_frame: 0, exit_frame: 100}
+- {person_id: 2, enter_frame: 50, exit_frame: 150}
+- {person_id: 3, enter_frame: 200, exit_frame: 260}
