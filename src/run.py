@@ -2,9 +2,13 @@
 
     python -m src.run --video digital_kiosk.mp4 --config configs/cam1.yaml
 
-Pipeline per frame: detect -> track -> ROI gate. Then dwell aggregation over the
-whole video. Writes predictions to outputs/tracks.yaml and peak VRAM + measured
-FPS to outputs/perf.yaml.
+Pipeline per frame: detect -> track -> ROI gate, embedding each in-zone box.
+Then appearance re-association stitches ByteTrack fragments back into one
+identity before dwell aggregation over the whole video. Writes predictions to
+outputs/tracks.yaml and peak VRAM + measured FPS to outputs/perf.yaml.
+
+--slice runs only a frame range (the eval_slice in the config, or an explicit
+start/end pair) for fast iteration; the full video is the default.
 """
 
 from __future__ import annotations
@@ -14,13 +18,20 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 import torch
 import yaml
 
 from src.detect.yolo import YoloDetector
 from src.dwell.aggregate import aggregate
+from src.reid.embed import Embedder
+from src.reid.stitch import TrackAppearance, stitch
 from src.track.bytetrack import ByteTrackTracker
-from src.zones.roi import in_zone
+from src.zones.roi import anchor, in_zone
+
+
+def _unit(vector: np.ndarray) -> np.ndarray:
+    return vector / np.linalg.norm(vector)
 
 
 def resolve_device(name: str) -> str:
@@ -38,6 +49,9 @@ def main() -> None:
     parser.add_argument("--video", required=True, type=Path)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--out-dir", type=Path, default=Path("outputs"))
+    # No values: use the config's eval_slice. Two values: an explicit [start, end).
+    # Absent: process the full video.
+    parser.add_argument("--slice", nargs="*", type=int)
     args = parser.parse_args()
 
     config = yaml.safe_load(args.config.read_text())
@@ -45,9 +59,15 @@ def main() -> None:
     det_cfg = config["detector"]
     device = resolve_device(det_cfg["device"])
 
+    if args.slice is None:
+        start_frame, end_frame = 0, None
+    else:
+        start_frame, end_frame = args.slice or config["eval_slice"]
+
     detector = YoloDetector(
         det_cfg["model"], det_cfg["confidence"], det_cfg["classes"], det_cfg["imgsz"], device
     )
+    embedder = Embedder(config["reid"]["model"], device)
     tracker = ByteTrackTracker(
         **{
             key: config["tracker"][key]
@@ -64,27 +84,65 @@ def main() -> None:
 
     cap = cv2.VideoCapture(str(args.video))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    if start_frame:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     in_zone_frames: dict[int, list[int]] = {}
+    # Per-track appearance/position accumulators, resolved into TrackAppearance after
+    # the loop: running embedding sum + count, and the anchor where each track first
+    # and last appeared in the zone (the endpoints stitching re-associates on).
+    embedding_sum: dict[int, np.ndarray] = {}
+    embedding_count: dict[int, int] = {}
+    first_anchor: dict[int, tuple[float, float]] = {}
+    last_anchor: dict[int, tuple[float, float]] = {}
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
-    frame_index = 0
+    frame_index = start_frame
     start = time.time()
     while True:
         ok, frame = cap.read()
-        if not ok:
+        if not ok or (end_frame is not None and frame_index >= end_frame):
             break
         detections = detector.detect(frame)
         tracks = tracker.update(detections, frame_index)
-        for track in tracks:
-            if in_zone(track, polygon):
+        zone_tracks = [track for track in tracks if in_zone(track, polygon)]
+        if zone_tracks:
+            boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
+            embeddings = embedder.embed(frame, boxes)
+            for track, embedding in zip(zone_tracks, embeddings):
                 in_zone_frames.setdefault(track.track_id, []).append(frame_index)
+                if track.track_id in embedding_sum:
+                    embedding_sum[track.track_id] += embedding
+                    embedding_count[track.track_id] += 1
+                else:
+                    embedding_sum[track.track_id] = embedding.copy()
+                    embedding_count[track.track_id] = 1
+                    first_anchor[track.track_id] = anchor(track)
+                last_anchor[track.track_id] = anchor(track)
         frame_index += 1
     elapsed = time.time() - start
     cap.release()
 
-    records = aggregate(in_zone_frames, fps, config["dwell"]["segment_gap_frames"])
+    appearances = {
+        track_id: TrackAppearance(
+            first_frame=frames[0],
+            last_frame=frames[-1],
+            first_anchor=first_anchor[track_id],
+            last_anchor=last_anchor[track_id],
+            embedding=_unit(embedding_sum[track_id] / embedding_count[track_id]),
+        )
+        for track_id, frames in in_zone_frames.items()
+    }
+    reid_cfg = config["reid"]
+    id_map = stitch(
+        appearances, reid_cfg["gap_frames"], reid_cfg["max_anchor_dist"], reid_cfg["min_similarity"]
+    )
+    merged_frames: dict[int, list[int]] = {}
+    for track_id, frames in in_zone_frames.items():
+        merged_frames.setdefault(id_map[track_id], []).extend(frames)
+
+    records = aggregate(merged_frames, fps, config["dwell"]["segment_gap_frames"])
     records.sort(key=lambda record: record.enter_frame)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -97,11 +155,14 @@ def main() -> None:
     # torch.cuda.max_memory_allocated only reports on CUDA; on mps/cpu it is 0 and
     # peak VRAM must be re-measured on the T4 target.
     peak_vram_gb = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0.0
+    # frame_index ends at the last frame read; subtract the seek offset so a slice
+    # run reports its processed-frame count and true throughput, not the whole video.
+    processed = frame_index - start_frame
     perf = {
         "device": device,
-        "frames": frame_index,
+        "frames": processed,
         "elapsed_s": round(elapsed, 2),
-        "fps": round(frame_index / elapsed, 2),
+        "fps": round(processed / elapsed, 2),
         "peak_vram_gb": round(peak_vram_gb, 3),
     }
     (args.out_dir / "perf.yaml").write_text(yaml.safe_dump(perf, sort_keys=False))

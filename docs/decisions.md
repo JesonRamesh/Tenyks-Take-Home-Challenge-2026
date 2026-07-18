@@ -304,6 +304,61 @@ Revised Phase 3 scope, in priority order:
    the accompanying-person policy before the next full eval run.
 7. P6-segment-3-style detector recall miss — separate, smaller,
    unrelated to the above.
+## Phase 3 Step 1 — Appearance-based ReID re-association
+
+Fragmentation is ~85% of the baseline overcount (285/354 predicted tracks are
+fragments of the 18 real people). This step re-associates those fragments by
+appearance, as a post-process on top of the existing track/dwell output —
+ByteTrack itself is untouched, per the eval-first / one-lever-at-a-time rule.
+
+**Backbone choice: torchvision `mobilenet_v3_small`, classifier head removed,
+ImageNet weights.** The obvious pick was OSNet (the standard lightweight ReID
+net), but its only turnkey source, torchreid's `FeatureExtractor`, downloads
+pretrained weights from Google Drive: the download hung for >2 min locally and
+never completed, which both blocks the required local sanity check and is a live
+risk on the Colab run the whole handoff workflow exists to protect. torchvision
+hosts weights on download.pytorch.org (~10 MB, ~2 s, reliable). The backbone
+with its head removed is 0.93M params and emits a 576-d global-pooled vector;
+peak VRAM is a few MB on top of YOLOv8n, comfortably inside the 16 GB edge
+budget. Cost per frame is one batched forward over the in-zone boxes only.
+
+Trade-off, logged honestly: ImageNet features are less person-discriminative
+than ReID-trained OSNet, and because they are post-ReLU/global-pooled they are
+non-negative, so cosine similarity between unrelated crops sits high rather than
+near zero. Mitigation is to never merge on appearance alone — see gates below.
+The backbone is config-driven (`reid.model`), so OSNet can be swapped in on
+Colab later if its weights are sourced reliably; that is a measured decision for
+a future run, not this one.
+
+**Stitching (src/reid/stitch.py): union-find over tracks, merge only when all
+three gates hold.** A track that ends is merged with a later one that (a) starts
+within `gap_frames` (90, ~3 s) of it ending, (b) re-appears within
+`max_anchor_dist` (250 px) of where it left off, and (c) has mean-embedding
+cosine >= `min_similarity` (0.8). Requiring temporal + spatial + appearance
+agreement together is what keeps the weaker appearance signal from over-merging
+two different people who happen to be at the kiosk at the same time. Canonical id
+is the earliest track_id in each merged group, so merged ids stay interpretable.
+
+**Scope is within-visit occlusion breaks, not multi-visit returns.** A person who
+leaves and comes back minutes later exceeds `gap_frames` and correctly stays a
+separate identity; the existing `segment_gap_frames` logic in aggregate still
+re-segments a merged id if it contains a genuine long internal gap, so dwell
+summing continues to mirror the GT protocol.
+
+Thresholds (gap_frames 90, max_anchor_dist 250, min_similarity 0.8) are
+principled starting values in cam1.yaml, not tuned to the dev clip — they are to
+be validated on the Colab slice-eval and revised there if needed. `min_similarity`
+in particular is expected to want tuning given the non-negative-feature note above.
+
+**Slicing (run.py --slice).** Added a frame-range option so a step can be scored
+on the dense/crowded diagnostic window (`eval_slice: [26700, 71000]`, covers
+P1-P9) for fast iteration; the full video stays the default. perf.yaml now
+reports processed-frame count and throughput net of the seek offset.
+
+Local sanity check only (400-frame slice, MPS): pipeline runs end to end, emits
+correctly-shaped tracks.yaml/perf.yaml, throughput ~48 FPS with embedding on top
+of detect+track. Not a measurement — real numbers come from the Colab slice-eval.
+
 ## Tooling — reproducible baseline eval
 
 `evaluate_baseline.py` scores `outputs/tracks.yaml` against

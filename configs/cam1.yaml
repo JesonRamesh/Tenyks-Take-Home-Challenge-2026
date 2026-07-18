@@ -31,11 +31,26 @@ tracker:
   track_buffer: 30 # frames a lost track survives before deletion
   fuse_score: true
 
+reid:
+  # Post-hoc appearance re-association: merges tracks ByteTrack fragmented across a
+  # short occlusion back into one identity. A merge needs all three gates below, so
+  # the weaker ImageNet appearance signal can't over-merge adjacent people. Scoped
+  # to within-visit breaks; multi-visit returns exceed gap_frames and stay separate.
+  model: mobilenet_v3_small # torchvision backbone, classifier head removed
+  gap_frames: 90 # max frame gap between a track ending and its re-appearance (~3s)
+  max_anchor_dist: 250 # px; the re-appearance must be near where the track left off
+  min_similarity: 0.8 # cosine floor on mean appearance embeddings to merge
+
 dwell:
   # A track's ROI presence splits into a new segment when its anchor leaves the ROI
   # for more than this many frames ("left for good"); per-track segment durations
   # are summed, mirroring how GT sums repeated visits under one person_id.
   segment_gap_frames: 30
+
+# Frame range used by run.py --slice for fast iteration: the dense/crowded window
+# from the baseline diagnostic (covers P1-P9), where fragmentation and staff show
+# up hardest. Not a tuning knob - the full video is the default when --slice is off.
+eval_slice: [26700, 71000]
 
 eval:
   min_iou: 0.5 # min temporal IoU for a predicted track to match a GT person

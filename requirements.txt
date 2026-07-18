@@ -3,6 +3,7 @@ scipy
 pyyaml
 pytest
 torch
+torchvision
 ultralytics
 opencv-python
 lap
