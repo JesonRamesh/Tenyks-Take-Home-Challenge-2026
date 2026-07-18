@@ -12,6 +12,10 @@ kiosk_roi:
     - [1017, 388]
     - [1007, 716]
     - [413, 716]
+  # Fraction of a box's height, measured up from the feet, that must fall inside
+  # the polygon for the track to count as in-zone. Hardens the old feet-only test
+  # against edge-clipping walkers and boundary-grazing phantom boxes.
+  box_depth_frac: 0.4
 
 detector:
   model: yolov8n

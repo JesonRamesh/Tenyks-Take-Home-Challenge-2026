@@ -27,6 +27,13 @@ def point_in_polygon(x: float, y: float, polygon: list[Point]) -> bool:
     return inside
 
 
-def in_zone(track: Track, polygon: list[Point]) -> bool:
-    x, y = anchor(track)
-    return point_in_polygon(x, y, polygon)
+def in_zone(track: Track, polygon: list[Point], box_depth_frac: float) -> bool:
+    # Require the lower box_depth_frac of the box's central axis to lie inside the
+    # ROI, not just the feet point: check both the bottom-center and the point that
+    # far up from it. A feet-only test let walkers whose feet clip the polygon edge
+    # (body outside) and phantom boxes grazing the boundary count as in-zone.
+    cx = (track.x1 + track.x2) / 2
+    depth = box_depth_frac * (track.y2 - track.y1)
+    return point_in_polygon(cx, track.y2, polygon) and point_in_polygon(
+        cx, track.y2 - depth, polygon
+    )

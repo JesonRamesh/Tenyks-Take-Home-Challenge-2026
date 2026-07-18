@@ -56,6 +56,7 @@ def main() -> None:
 
     config = yaml.safe_load(args.config.read_text())
     polygon = [tuple(point) for point in config["kiosk_roi"]["roi_polygon"]]
+    box_depth_frac = config["kiosk_roi"]["box_depth_frac"]
     det_cfg = config["detector"]
     device = resolve_device(det_cfg["device"])
 
@@ -106,7 +107,7 @@ def main() -> None:
             break
         detections = detector.detect(frame)
         tracks = tracker.update(detections, frame_index)
-        zone_tracks = [track for track in tracks if in_zone(track, polygon)]
+        zone_tracks = [track for track in tracks if in_zone(track, polygon, box_depth_frac)]
         if zone_tracks:
             boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
             embeddings = embedder.embed(frame, boxes)
