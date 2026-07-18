@@ -366,3 +366,18 @@ of detect+track. Not a measurement — real numbers come from the Colab slice-ev
 pipeline's own `collapse_segments` and calling the (untouched) eval harness. It
 regenerates `outputs/eval_report.csv` exactly, so the baseline number is
 reproducible from the repo rather than a scratch script.
+
+**--slice scoring (Phase 3 fast iteration).** A `run.py --slice` output only
+contains predictions inside the window, so scoring it against all 18 GT people is
+invalid — the ~9 out-of-window people can never be matched and would corrupt
+count_error. `--slice` takes the same `[start, end]` as run.py's `eval_slice`
+(bare flag reads the config, so the two stay in sync) and restricts GT to that
+window with two deliberate rules: a segment is *included* if it overlaps the open
+window (`enter < end and exit > start`), and an included segment is *clipped* to
+`[max(enter, start), min(exit, end)]` before any duration metric. Clipping (not
+just filtering) is the important part: GT segments cross the boundary — P6's
+60520-71338 runs 338 frames past a 71000 slice end — and scoring the unclipped
+duration would inflate dwell error for reasons unrelated to the change under
+test. Predicted tracks need no clipping; the pipeline already bounded them. The
+run prints how many GT people/segments the window included vs excluded so the
+denominator is always visible (the default window keeps exactly P1-P9).
