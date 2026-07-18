@@ -115,8 +115,22 @@ Window keeps exactly P1–P9 (9 people).
 `in_zone` now requires the lower `box_depth_frac` (0.4, config) of the box's central
 axis inside the ROI — both the feet point and the point 40% up — instead of the feet
 point alone. Targets two confirmed zero-overlap failure modes: edge-clipping walkers
-(feet inside, body out) and phantom boxes grazing the boundary. Result: pending
-slice-eval.
+(feet inside, body out) and phantom boxes grazing the boundary.
+- **Result (slice, 9 GT):** pred 99→100, `num_matched` 2 and dwell MAE 81s
+  byte-identical to Step 1 — a no-op on this customer-dense window (the ±1 is ReID
+  re-stitch jitter from the gate change). Its target population (edge-clip walkers,
+  phantoms) is sparse in the dense window and concentrated in the sparser rest of
+  the video, so the payoff is expected in the full-video pass. Crucially removed no
+  real customers, so `box_depth_frac` 0.4 is safe.
+
+### Step 3 — stationarity / min-dwell gate
+
+New `src/zones/stationarity.py`, applied to merged tracks before aggregation. A
+track counts as a visit only if it lingers: in-ROI dwell ≥ `min_dwell_s` (3.0), OR a
+run of ≥ `min_still_frames` (15) consecutive frames with anchor step ≤ `max_step_px`
+(4.0 px/frame). Targets people crossing the ROI *interior* at walking pace — the
+walk-throughs zone hardening (edge-clip only) can't catch, unavoidable given the
+kiosk sits on the entrance path. Result: pending slice-eval.
 
 ## Tooling
 

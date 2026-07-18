@@ -45,6 +45,15 @@ reid:
   max_anchor_dist: 250 # px; the re-appearance must be near where the track left off
   min_similarity: 0.8 # cosine floor on mean appearance embeddings to merge
 
+stationarity:
+  # A track counts as a kiosk visit only if it lingers: either its in-ROI dwell
+  # reaches min_dwell_s, or it holds nearly still (anchor step <= max_step_px/frame)
+  # for at least min_still_frames consecutive frames. Drops people who cross the ROI
+  # interior at walking pace, which zone hardening (edge-clip only) can't catch.
+  min_dwell_s: 3.0
+  max_step_px: 4.0
+  min_still_frames: 15
+
 dwell:
   # A track's ROI presence splits into a new segment when its anchor leaves the ROI
   # for more than this many frames ("left for good"); per-track segment durations

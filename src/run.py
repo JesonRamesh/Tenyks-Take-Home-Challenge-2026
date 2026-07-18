@@ -28,6 +28,7 @@ from src.reid.embed import Embedder
 from src.reid.stitch import TrackAppearance, stitch
 from src.track.bytetrack import ByteTrackTracker
 from src.zones.roi import anchor, in_zone
+from src.zones.stationarity import is_visit
 
 
 def _unit(vector: np.ndarray) -> np.ndarray:
@@ -89,13 +90,15 @@ def main() -> None:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     in_zone_frames: dict[int, list[int]] = {}
-    # Per-track appearance/position accumulators, resolved into TrackAppearance after
-    # the loop: running embedding sum + count, and the anchor where each track first
-    # and last appeared in the zone (the endpoints stitching re-associates on).
+    # Per-track accumulators resolved after the loop: running embedding sum + count
+    # for re-association, and the anchor on every in-zone frame (aligned with
+    # in_zone_frames) for the stationarity gate. first/last anchor are just the ends
+    # of that sequence, kept separately as the endpoints stitching re-associates on.
     embedding_sum: dict[int, np.ndarray] = {}
     embedding_count: dict[int, int] = {}
     first_anchor: dict[int, tuple[float, float]] = {}
     last_anchor: dict[int, tuple[float, float]] = {}
+    track_anchors: dict[int, list[tuple[float, float]]] = {}
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
@@ -112,15 +115,17 @@ def main() -> None:
             boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
             embeddings = embedder.embed(frame, boxes)
             for track, embedding in zip(zone_tracks, embeddings):
+                point = anchor(track)
                 in_zone_frames.setdefault(track.track_id, []).append(frame_index)
+                track_anchors.setdefault(track.track_id, []).append(point)
                 if track.track_id in embedding_sum:
                     embedding_sum[track.track_id] += embedding
                     embedding_count[track.track_id] += 1
                 else:
                     embedding_sum[track.track_id] = embedding.copy()
                     embedding_count[track.track_id] = 1
-                    first_anchor[track.track_id] = anchor(track)
-                last_anchor[track.track_id] = anchor(track)
+                    first_anchor[track.track_id] = point
+                last_anchor[track.track_id] = point
         frame_index += 1
     elapsed = time.time() - start
     cap.release()
@@ -140,10 +145,31 @@ def main() -> None:
         appearances, reid_cfg["gap_frames"], reid_cfg["max_anchor_dist"], reid_cfg["min_similarity"]
     )
     merged_frames: dict[int, list[int]] = {}
+    merged_anchors: dict[int, list[tuple[float, float]]] = {}
     for track_id, frames in in_zone_frames.items():
-        merged_frames.setdefault(id_map[track_id], []).extend(frames)
+        canonical = id_map[track_id]
+        merged_frames.setdefault(canonical, []).extend(frames)
+        merged_anchors.setdefault(canonical, []).extend(track_anchors[track_id])
 
-    records = aggregate(merged_frames, fps, config["dwell"]["segment_gap_frames"])
+    # Stationarity gate: drop merged tracks that only walked through the ROI, keeping
+    # those that dwelt or held still. Sort each track's samples by frame first.
+    st_cfg = config["stationarity"]
+    visit_frames: dict[int, list[int]] = {}
+    for canonical, frames in merged_frames.items():
+        order = sorted(range(len(frames)), key=frames.__getitem__)
+        sorted_frames = [frames[i] for i in order]
+        sorted_anchors = [merged_anchors[canonical][i] for i in order]
+        if is_visit(
+            sorted_frames,
+            sorted_anchors,
+            fps,
+            st_cfg["min_dwell_s"],
+            st_cfg["max_step_px"],
+            st_cfg["min_still_frames"],
+        ):
+            visit_frames[canonical] = frames
+
+    records = aggregate(visit_frames, fps, config["dwell"]["segment_gap_frames"])
     records.sort(key=lambda record: record.enter_frame)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
