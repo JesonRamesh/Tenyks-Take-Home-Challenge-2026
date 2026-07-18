@@ -54,6 +54,25 @@ stationarity:
   max_step_px: 4.0
   min_still_frames: 15
 
+staff:
+  # Staff uniform: a horizontal green/red/white chest stripe on an all-black outfit
+  # + dark head covering. A frame is staff only if a chest band holds both a
+  # saturated-green and a saturated-red cluster AND the rest of the body is dark; a
+  # track is staff only if that holds across min_staff_frame_frac of its frames.
+  # HSV ranges (OpenCV: H 0-179, S/V 0-255) are PLACEHOLDERS - tune on real staff
+  # crops on the GPU box; the region/logic structure is the fixed part.
+  stripe_band: [0.22, 0.38] # chest band, as fractions of box height from the top
+  green_hsv_low: [40, 70, 50]
+  green_hsv_high: [85, 255, 255]
+  red_hsv_low1: [0, 70, 50] # red straddles the hue wraparound -> two ranges
+  red_hsv_high1: [10, 255, 255]
+  red_hsv_low2: [170, 70, 50]
+  red_hsv_high2: [179, 255, 255]
+  min_cluster_frac: 0.03 # min share of band pixels in a hue cluster to count it present
+  dark_v_max: 70 # V at/below this is "dark" for the rest-of-body check
+  min_dark_frac: 0.5 # min share of non-stripe pixels that must be dark
+  min_staff_frame_frac: 0.75 # min share of a track's frames matching to flag it staff
+
 dwell:
   # A track's ROI presence splits into a new segment when its anchor leaves the ROI
   # for more than this many frames ("left for good"); per-track segment durations

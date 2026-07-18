@@ -25,7 +25,7 @@ from pathlib import Path
 import yaml
 
 from eval.label.schema import PersonInterval, load_predictions
-from eval.metrics import evaluate
+from eval.metrics import evaluate, temporal_iou
 from eval.report import report
 from src.dwell.aggregate import collapse_segments
 
@@ -66,6 +66,7 @@ def main() -> None:
     parser.add_argument("--predictions", type=Path, default=Path("outputs/tracks.yaml"))
     parser.add_argument("--config", type=Path, default=Path("configs/cam1.yaml"))
     parser.add_argument("--csv", type=Path, default=Path("outputs/eval_report.csv"))
+    parser.add_argument("--staff", type=Path, default=Path("outputs/staff.yaml"))
     # No values: use the config's eval_slice. Two values: an explicit [start, end).
     # Absent: score the full video against all GT.
     parser.add_argument("--slice", nargs="*", type=int)
@@ -88,6 +89,22 @@ def main() -> None:
             f"slice [{window[0]}, {window[1]}]: "
             f"{included_people} GT people included ({excluded_people} excluded), "
             f"{included_segments} segments included ({excluded_segments} excluded)"
+        )
+
+    # Staff false-positive check: a track the pipeline flagged as staff should never
+    # temporally match a real GT customer. Report any that do — they are the ones the
+    # heuristic would wrongly exclude.
+    if args.staff.exists():
+        staff = load_predictions(args.staff)
+        false_positives = [
+            (track.track_id, person.person_id)
+            for track in staff
+            for person in ground_truth
+            if temporal_iou(track, person) >= min_iou
+        ]
+        print(
+            f"staff filter: {len(staff)} tracks flagged, "
+            f"{len(false_positives)} matching a GT customer (false positives): {false_positives}"
         )
 
     result = evaluate(predictions, ground_truth, fps=fps, min_iou=min_iou)

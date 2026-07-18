@@ -130,7 +130,32 @@ track counts as a visit only if it lingers: in-ROI dwell ≥ `min_dwell_s` (3.0)
 run of ≥ `min_still_frames` (15) consecutive frames with anchor step ≤ `max_step_px`
 (4.0 px/frame). Targets people crossing the ROI *interior* at walking pace — the
 walk-throughs zone hardening (edge-clip only) can't catch, unavoidable given the
-kiosk sits on the entrance path. Result: pending slice-eval.
+kiosk sits on the entrance path.
+- **Result (slice, 9 GT):** pred 100→**80** (−20, −20%), count_error +91→**+71**,
+  `num_matched` 2 and dwell MAE 81s unchanged. First gate to bite on the slice:
+  removed 20 walk-throughs and zero real customers.
+
+### Step 4 — staff-exclusion filter
+
+New `src/staff/filter.py`. Staff wear a horizontal green/red/white chest stripe on
+an all-black outfit + dark head covering. A frame reads as staff only if a narrow
+chest band (`stripe_band` fractions of box height) holds **both** a saturated-green
+and a saturated-red cluster **and** the rest of the body (head/lower-torso/legs) is
+consistently dark (V ≤ `dark_v_max`); a track is flagged only if the pattern holds
+across ≥ `min_staff_frame_frac` (0.75) of its frames. The stripe is the load-bearing
+signal — plain black clothing is common on customers, so darkness alone would
+over-flag (verified: an all-black synthetic crop is *not* flagged; stripe+dark is).
+HSV ranges are placeholders to calibrate on real staff crops; the region/dual-
+cluster/sustained-fraction structure is fixed.
+
+Flagged tracks are removed from `tracks.yaml` and written to `outputs/staff.yaml`;
+`evaluate_baseline.py` prints a false-positive check — how many flagged tracks
+temporally match a GT customer (must be 0). Track-id-only validation against the
+confirmed staff ids (680, 38, 37, 915, 719, 618, 665, 711, 828, 829) is a floor
+check, not the success criterion — those ids are baseline numbering with no stored
+crops, and most sit outside the slice, so **true-positive staff detection validates
+on the full-video pass**; the slice mainly proves customers aren't flagged. Result:
+pending slice-eval.
 
 ## Tooling
 

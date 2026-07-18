@@ -26,6 +26,7 @@ from src.detect.yolo import YoloDetector
 from src.dwell.aggregate import aggregate
 from src.reid.embed import Embedder
 from src.reid.stitch import TrackAppearance, stitch
+from src.staff.filter import StaffClassifier
 from src.track.bytetrack import ByteTrackTracker
 from src.zones.roi import anchor, in_zone
 from src.zones.stationarity import is_visit
@@ -70,6 +71,7 @@ def main() -> None:
         det_cfg["model"], det_cfg["confidence"], det_cfg["classes"], det_cfg["imgsz"], device
     )
     embedder = Embedder(config["reid"]["model"], device)
+    staff_clf = StaffClassifier(config["staff"])
     tracker = ByteTrackTracker(
         **{
             key: config["tracker"][key]
@@ -99,6 +101,9 @@ def main() -> None:
     first_anchor: dict[int, tuple[float, float]] = {}
     last_anchor: dict[int, tuple[float, float]] = {}
     track_anchors: dict[int, list[tuple[float, float]]] = {}
+    # Frames of each track whose crop matched the staff uniform; the flag is a track
+    # majority, so a fraction of these over the track's total in-zone frames decides.
+    staff_hits: dict[int, int] = {}
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
@@ -114,10 +119,12 @@ def main() -> None:
         if zone_tracks:
             boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
             embeddings = embedder.embed(frame, boxes)
-            for track, embedding in zip(zone_tracks, embeddings):
+            staff_flags = staff_clf.staff_frames(frame, boxes)
+            for track, embedding, staff_flag in zip(zone_tracks, embeddings, staff_flags):
                 point = anchor(track)
                 in_zone_frames.setdefault(track.track_id, []).append(frame_index)
                 track_anchors.setdefault(track.track_id, []).append(point)
+                staff_hits[track.track_id] = staff_hits.get(track.track_id, 0) + staff_flag
                 if track.track_id in embedding_sum:
                     embedding_sum[track.track_id] += embedding
                     embedding_count[track.track_id] += 1
@@ -146,10 +153,12 @@ def main() -> None:
     )
     merged_frames: dict[int, list[int]] = {}
     merged_anchors: dict[int, list[tuple[float, float]]] = {}
+    merged_staff_hits: dict[int, int] = {}
     for track_id, frames in in_zone_frames.items():
         canonical = id_map[track_id]
         merged_frames.setdefault(canonical, []).extend(frames)
         merged_anchors.setdefault(canonical, []).extend(track_anchors[track_id])
+        merged_staff_hits[canonical] = merged_staff_hits.get(canonical, 0) + staff_hits[track_id]
 
     # Stationarity gate: drop merged tracks that only walked through the ROI, keeping
     # those that dwelt or held still. Sort each track's samples by frame first.
@@ -169,15 +178,33 @@ def main() -> None:
         ):
             visit_frames[canonical] = frames
 
-    records = aggregate(visit_frames, fps, config["dwell"]["segment_gap_frames"])
+    # Staff filter: split the visits into customers and staff by the uniform-frame
+    # fraction. Staff are written separately so the eval can check none of them
+    # actually match a GT customer (a false positive).
+    min_staff_frac = config["staff"]["min_staff_frame_frac"]
+    customer_frames: dict[int, list[int]] = {}
+    staff_frames: dict[int, list[int]] = {}
+    for canonical, frames in visit_frames.items():
+        target = staff_frames if merged_staff_hits[canonical] / len(frames) >= min_staff_frac else customer_frames
+        target[canonical] = frames
+
+    segment_gap = config["dwell"]["segment_gap_frames"]
+    records = aggregate(customer_frames, fps, segment_gap)
     records.sort(key=lambda record: record.enter_frame)
+    staff_records = sorted(
+        aggregate(staff_frames, fps, segment_gap), key=lambda record: record.enter_frame
+    )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    tracks_yaml = [
-        {"track_id": record.track_id, "enter_frame": record.enter_frame, "exit_frame": record.exit_frame}
-        for record in records
-    ]
-    (args.out_dir / "tracks.yaml").write_text(yaml.safe_dump(tracks_yaml, sort_keys=False))
+
+    def _intervals(rows: list) -> list[dict]:
+        return [
+            {"track_id": r.track_id, "enter_frame": r.enter_frame, "exit_frame": r.exit_frame}
+            for r in rows
+        ]
+
+    (args.out_dir / "tracks.yaml").write_text(yaml.safe_dump(_intervals(records), sort_keys=False))
+    (args.out_dir / "staff.yaml").write_text(yaml.safe_dump(_intervals(staff_records), sort_keys=False))
 
     # torch.cuda.max_memory_allocated only reports on CUDA; on mps/cpu it is 0 and
     # peak VRAM must be re-measured on the T4 target.
