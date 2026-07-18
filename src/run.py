@@ -54,6 +54,9 @@ def main() -> None:
     # No values: use the config's eval_slice. Two values: an explicit [start, end).
     # Absent: process the full video.
     parser.add_argument("--slice", nargs="*", type=int)
+    # Save up to N frames annotated with any box the staff heuristic fired on, for
+    # eyeballing what it flags. 0 (default) writes none.
+    parser.add_argument("--staff-debug", type=int, default=0)
     args = parser.parse_args()
 
     config = yaml.safe_load(args.config.read_text())
@@ -107,6 +110,11 @@ def main() -> None:
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
+    staff_debug_dir = args.out_dir / "staff_debug"
+    if args.staff_debug:
+        staff_debug_dir.mkdir(parents=True, exist_ok=True)
+    staff_debug_saved = 0
+
     frame_index = start_frame
     start = time.time()
     while True:
@@ -120,11 +128,19 @@ def main() -> None:
             boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
             embeddings = embedder.embed(frame, boxes)
             staff_flags = staff_clf.staff_frames(frame, boxes)
-            for track, embedding, staff_flag in zip(zone_tracks, embeddings, staff_flags):
+            for track, embedding, staff_flag, box in zip(zone_tracks, embeddings, staff_flags, boxes):
                 point = anchor(track)
                 in_zone_frames.setdefault(track.track_id, []).append(frame_index)
                 track_anchors.setdefault(track.track_id, []).append(point)
                 staff_hits[track.track_id] = staff_hits.get(track.track_id, 0) + staff_flag
+                if staff_flag and staff_debug_saved < args.staff_debug:
+                    vis = frame.copy()
+                    x1b, y1b, x2b, y2b = (int(v) for v in box)
+                    cv2.rectangle(vis, (x1b, y1b), (x2b, y2b), (0, 0, 255), 2)
+                    cv2.putText(vis, f"staff? t{track.track_id} f{frame_index}", (x1b, max(0, y1b - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    cv2.imwrite(str(staff_debug_dir / f"f{frame_index}_t{track.track_id}.png"), vis)
+                    staff_debug_saved += 1
                 if track.track_id in embedding_sum:
                     embedding_sum[track.track_id] += embedding
                     embedding_count[track.track_id] += 1

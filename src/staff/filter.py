@@ -1,16 +1,20 @@
 """Staff-exclusion heuristic (no trained classifier).
 
-Staff wear a specific uniform: a horizontal green / red / white chest stripe
-across the upper-mid torso on an otherwise all-black outfit with a dark head
-covering. The stripe is the distinguishing signal — plain black clothing is common
-on customers, so darkness alone would over-flag. A frame reads as staff only if a
-narrow chest band holds BOTH a saturated-green and a saturated-red cluster AND the
-rest of the body (head, lower torso, legs) is consistently dark. A track is flagged
-staff only if that pattern holds across a high fraction of its frames, so a single
-lucky/unlucky frame can't decide it.
+Staff wear a specific uniform: a horizontal green-over-red-over-white chest stripe
+on an otherwise all-black outfit with a dark head covering. The stripe is the
+distinguishing signal — plain black clothing is common on customers, so darkness
+alone would over-flag. A frame reads as staff only if a chest band holds BOTH a
+saturated-green and a saturated-red cluster AND the green cluster sits above the
+red one (the uniform's actual layout).
 
-HSV ranges are placeholders pending calibration against real staff crops on the
-GPU box; the region/logic structure is the fixed part.
+Two calibration facts drive the ranges, both from real staff crops:
+- The black outfit renders as mid-gray on this camera, so a low-brightness test is
+  unreliable; the green-above-red ordering is used as the confirming signal instead.
+- The staff are dark-skinned and skin falls at hue ~0-15, overlapping pure red, so
+  red is matched on the high wraparound side (hue ~155-179) only — where the stripe
+  red actually sits — to keep skin out of the red cluster.
+
+Ranges stay config-driven for re-tuning against the full video.
 """
 
 from __future__ import annotations
@@ -18,8 +22,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-# Horizontal center strip of the box used for every region test, to keep the
-# left/right background out of the color and darkness measurements.
+# Horizontal center strip of the box used for the band test, to keep the left/right
+# background out of the color measurement.
 _CORE_X = (0.2, 0.8)
 
 
@@ -28,14 +32,9 @@ class StaffClassifier:
         self.stripe_lo, self.stripe_hi = cfg["stripe_band"]
         self.green_low = np.array(cfg["green_hsv_low"], dtype=np.uint8)
         self.green_high = np.array(cfg["green_hsv_high"], dtype=np.uint8)
-        # Red straddles the hue wraparound, so it needs two ranges.
-        self.red_low1 = np.array(cfg["red_hsv_low1"], dtype=np.uint8)
-        self.red_high1 = np.array(cfg["red_hsv_high1"], dtype=np.uint8)
-        self.red_low2 = np.array(cfg["red_hsv_low2"], dtype=np.uint8)
-        self.red_high2 = np.array(cfg["red_hsv_high2"], dtype=np.uint8)
+        self.red_low = np.array(cfg["red_hsv_low"], dtype=np.uint8)
+        self.red_high = np.array(cfg["red_hsv_high"], dtype=np.uint8)
         self.min_cluster_frac = cfg["min_cluster_frac"]
-        self.dark_v_max = cfg["dark_v_max"]
-        self.min_dark_frac = cfg["min_dark_frac"]
 
     def _is_staff_frame(self, crop: np.ndarray) -> bool:
         h, w = crop.shape[:2]
@@ -44,20 +43,19 @@ class StaffClassifier:
         if hi <= lo or core.shape[1] == 0:
             return False
 
-        hsv = cv2.cvtColor(core, cv2.COLOR_BGR2HSV)
-        band = hsv[lo:hi]
+        band = cv2.cvtColor(core[lo:hi], cv2.COLOR_BGR2HSV)
         band_px = band.shape[0] * band.shape[1]
-        green = cv2.inRange(band, self.green_low, self.green_high).sum() / 255
-        red = (
-            cv2.inRange(band, self.red_low1, self.red_high1).sum()
-            + cv2.inRange(band, self.red_low2, self.red_high2).sum()
-        ) / 255
-        if green / band_px < self.min_cluster_frac or red / band_px < self.min_cluster_frac:
+        green_per_row = cv2.inRange(band, self.green_low, self.green_high).sum(axis=1) / 255
+        red_per_row = cv2.inRange(band, self.red_low, self.red_high).sum(axis=1) / 255
+        if green_per_row.sum() / band_px < self.min_cluster_frac:
+            return False
+        if red_per_row.sum() / band_px < self.min_cluster_frac:
             return False
 
-        outside = np.concatenate([hsv[:lo], hsv[hi:]], axis=0)
-        dark_frac = float((outside[:, :, 2] <= self.dark_v_max).mean())
-        return dark_frac >= self.min_dark_frac
+        rows = np.arange(band.shape[0])
+        green_center = (rows * green_per_row).sum() / green_per_row.sum()
+        red_center = (rows * red_per_row).sum() / red_per_row.sum()
+        return green_center < red_center
 
     def staff_frames(self, frame: np.ndarray, boxes: list[tuple[float, float, float, float]]) -> list[bool]:
         """Per-box staff verdict for one frame."""

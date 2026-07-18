@@ -137,25 +137,36 @@ kiosk sits on the entrance path.
 
 ### Step 4 — staff-exclusion filter
 
-New `src/staff/filter.py`. Staff wear a horizontal green/red/white chest stripe on
-an all-black outfit + dark head covering. A frame reads as staff only if a narrow
-chest band (`stripe_band` fractions of box height) holds **both** a saturated-green
-and a saturated-red cluster **and** the rest of the body (head/lower-torso/legs) is
-consistently dark (V ≤ `dark_v_max`); a track is flagged only if the pattern holds
-across ≥ `min_staff_frame_frac` (0.75) of its frames. The stripe is the load-bearing
-signal — plain black clothing is common on customers, so darkness alone would
-over-flag (verified: an all-black synthetic crop is *not* flagged; stripe+dark is).
-HSV ranges are placeholders to calibrate on real staff crops; the region/dual-
-cluster/sustained-fraction structure is fixed.
+New `src/staff/filter.py`. Staff wear a horizontal green-over-red-over-white chest
+stripe on an all-black outfit + dark head covering. A frame reads as staff only if a
+chest band (`stripe_band`, fractions of box height) holds **both** a saturated-green
+and a saturated-red cluster **and** green sits above red (the uniform's layout); a
+track is flagged only if that holds across ≥ `min_staff_frame_frac` (0.7) of its
+frames. The stripe is the load-bearing signal — plain black clothing is common on
+customers, so it alone can't decide.
+
+Two calibration findings from real staff crops changed the design from the first
+placeholder version:
+- **Darkness is not a usable confirming signal here.** The black outfit renders as
+  mid-gray on this camera (lower-torso V median 77–121), so a low-V test
+  false-negatives real staff. Replaced it with the **green-above-red ordering**,
+  which is lighting-invariant and more specific to the uniform.
+- **Red is matched on the high hue side only (155–179).** The staff are dark-skinned
+  and skin sits at hue ~0–15 — inside pure red's low side — which inflated the red
+  cluster with neck/arm skin and inverted the ordering. The stripe red actually sits
+  at hue ~167–175, so excluding the low side keeps skin out.
+
+Validated: both reference crops flag as staff; all-black / bright / skin-tone crops
+do not; and on the raw video the confirmed staff-680 window (frames ~115468+) is
+flagged, with `--run.py --staff-debug N` dumping annotated frames that show the box
+on a uniformed staff member. HSV ranges stay config-driven for full-video re-tuning.
 
 Flagged tracks are removed from `tracks.yaml` and written to `outputs/staff.yaml`;
 `evaluate_baseline.py` prints a false-positive check — how many flagged tracks
-temporally match a GT customer (must be 0). Track-id-only validation against the
-confirmed staff ids (680, 38, 37, 915, 719, 618, 665, 711, 828, 829) is a floor
-check, not the success criterion — those ids are baseline numbering with no stored
-crops, and most sit outside the slice, so **true-positive staff detection validates
-on the full-video pass**; the slice mainly proves customers aren't flagged. Result:
-pending slice-eval.
+temporally match a GT customer (must be 0). Confirmed staff ids (680, 38, 37, 915,
+719, 618, 665, 711, 828, 829) are a floor reference only; most sit outside the
+slice, so full true-positive validation is on the full-video pass. Result (slice):
+0 flagged, 0 false positives — no staff in the window, customers untouched.
 
 ## Tooling
 
