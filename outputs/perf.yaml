@@ -1,5 +1,5 @@
-device: mps
+device: cuda
 frames: 216306
-elapsed_s: 2050.08
-fps: 105.51
-peak_vram_gb: 0.0
+elapsed_s: 695.23
+fps: 311.13
+peak_vram_gb: 0.039

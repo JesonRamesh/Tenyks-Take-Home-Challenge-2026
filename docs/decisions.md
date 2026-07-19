@@ -195,6 +195,11 @@ phantoms, staff — mostly live outside it) but act on the full video.
 Reported perf (T4): final pipeline **43.4 FPS** (above the ~30 fps source rate, so
 real-time capable) and **peak VRAM 0.039 GB** (torch max_memory_allocated); even
 with CUDA context + reserved cache the footprint is a fraction of the 16 GB budget.
+The full-video run (trailbreak RTX 4070 Ti Super, all 216k frames) independently
+reported the same **0.039 GB** peak VRAM at **311 FPS** — confirming VRAM is
+hardware-independent and the pipeline is real-time on both the edge target and
+modern hardware. `outputs/{tracks,staff,perf}.yaml` + `eval_report.csv` are that
+full-video run, committed as the reproducible result.
 
 Remaining overcount (157 vs 18) is residual fragmentation in dense crowds, phantom
 detections (deferred), and untuned thresholds; ReID/stationarity thresholds are the

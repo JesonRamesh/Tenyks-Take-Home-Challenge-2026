@@ -1,2 +1,2 @@
 config,gt_count,pred_count,count_error,num_matched,dwell_mae_s,dwell_mape_pct,fps
-baseline,18,354,+336,2,121.804,46.84,30.1
+final,18,157,+139,4,46.481,13.75,30.1
