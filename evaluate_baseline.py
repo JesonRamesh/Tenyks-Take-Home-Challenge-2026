@@ -70,6 +70,9 @@ def main() -> None:
     # No values: use the config's eval_slice. Two values: an explicit [start, end).
     # Absent: score the full video against all GT.
     parser.add_argument("--slice", nargs="*", type=int)
+    # Overrides the report row label; defaults to baseline/slice by run type. Pass a
+    # name (e.g. final) so a non-baseline run isn't mislabelled in the table/CSV.
+    parser.add_argument("--name", default=None)
     args = parser.parse_args()
 
     config = yaml.safe_load(args.config.read_text())
@@ -79,6 +82,7 @@ def main() -> None:
     else:
         window = tuple(args.slice) if args.slice else tuple(config["eval_slice"])
         name = "slice"
+    name = args.name or name
 
     ground_truth, fps, stats = load_kiosk_ground_truth(args.gt, window)
     predictions = load_predictions(args.predictions)

@@ -158,7 +158,7 @@ placeholder version:
 
 Validated: both reference crops flag as staff; all-black / bright / skin-tone crops
 do not; and on the raw video the confirmed staff-680 window (frames ~115468+) is
-flagged, with `--run.py --staff-debug N` dumping annotated frames that show the box
+flagged, with `run.py --staff-debug N` dumping annotated frames that show the box
 on a uniformed staff member. HSV ranges stay config-driven for full-video re-tuning.
 
 Flagged tracks are removed from `tracks.yaml` and written to `outputs/staff.yaml`;
@@ -168,11 +168,44 @@ temporally match a GT customer (must be 0). Confirmed staff ids (680, 38, 37, 91
 slice, so full true-positive validation is on the full-video pass. Result (slice):
 0 flagged, 0 false positives — no staff in the window, customers untouched.
 
+## Final results
+
+Full pipeline = baseline + ReID + zone hardening + stationarity + staff filter.
+Accuracy is from the full-video run (trailbreak; the pipeline is deterministic, so
+accuracy is hardware-independent); FPS + peak VRAM are from a T4 slice (the 16 GB
+edge target — throughput and VRAM don't depend on frame count).
+
+Full video vs baseline (18 GT):
+
+| config   | pred | count_err | matched | dwell MAE | dwell MAPE |
+| -------- | ---- | --------- | ------- | --------- | ---------- |
+| baseline | 354  | +336      | 2/18    | 121.8s    | 46.8%      |
+| final    | 157  | +139      | 4/18    | 46.5s     | 13.75%     |
+
+Every metric improved: overcount −56%, matched doubled, dwell MAE −62%, MAPE −71%.
+Staff filter on the full video: **7 flagged, 0 false positives** (no GT customer
+flagged) — the deferred true-positive + false-positive validation, passed.
+
+Slice progression (frames 26700–71000, 9 GT; fast-iteration count):
+baseline 172 → +ReID 99 → +zone 100 → +stationarity 80 → +staff 80. ReID is the
+dominant lever (−42%); stationarity the next (−20%); zone hardening and staff are
+near-no-ops on this customer-dense window (their targets — edge-clip walkers,
+phantoms, staff — mostly live outside it) but act on the full video.
+
+Reported perf (T4): final pipeline **43.4 FPS** (above the ~30 fps source rate, so
+real-time capable) and **peak VRAM 0.039 GB** (torch max_memory_allocated); even
+with CUDA context + reserved cache the footprint is a fraction of the 16 GB budget.
+
+Remaining overcount (157 vs 18) is residual fragmentation in dense crowds, phantom
+detections (deferred), and untuned thresholds; ReID/stationarity thresholds are the
+levers for a further pass.
+
 ## Tooling
 
 `evaluate_baseline.py` scores `outputs/tracks.yaml` against `kiosk_gt.yaml`,
 collapsing repeat visits with the pipeline's own `collapse_segments` and calling the
 untouched eval harness; regenerates `outputs/eval_report.csv`. `--slice` adds the
-windowed scoring above. Labelling/diagnostic scripts (label_gt, validate_gt,
+windowed scoring above; `--name` labels the report row (e.g. `final`) so a
+non-baseline run isn't mislabelled. Labelling/diagnostic scripts (label_gt, validate_gt,
 review_frames, diagnose_baseline, classify_tracks, define_roi) are gitignored — not
 part of the deliverable.
