@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+import numpy as np
+
 from src.detect.base import Detection
 
 
@@ -23,6 +25,11 @@ class Track:
 class Tracker(Protocol):
     """A multi-object tracker. Maps per-frame detections to stable identities."""
 
-    def update(self, detections: list[Detection], frame_index: int) -> list[Track]:
-        """Advance the tracker by one frame and return the tracks active in it."""
+    def update(self, detections: list[Detection], frame: np.ndarray, frame_index: int) -> list[Track]:
+        """Advance the tracker by one frame and return the tracks active in it.
+
+        The frame is passed because appearance-aware trackers (boxmot's
+        StrongSORT/BoT-SORT/DeepOCSORT) associate on ReID features cropped from
+        it; motion-only trackers (ByteTrack, OC-SORT) ignore it.
+        """
         ...

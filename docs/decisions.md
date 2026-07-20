@@ -214,3 +214,82 @@ windowed scoring above; `--name` labels the report row (e.g. `final`) so a
 non-baseline run isn't mislabelled. Labelling/diagnostic scripts (label_gt, validate_gt,
 review_frames, diagnose_baseline, classify_tracks, define_roi) are gitignored — not
 part of the deliverable.
+
+## Phase 5 — architecture comparison: built-in vs post-hoc ReID
+
+The Phase 3 diagnostic pinned the dominant remaining failure to long-term identity
+loss: 7/8 multi-segment GT people get a fresh track_id on each re-entry, and crowding
+collapses several simultaneous people onto one track. Our fix is a post-hoc ReID
+embed + gap-stitch bolted onto motion-only ByteTrack. Phase 5 tests whether a tracker
+with appearance association built *into* the data-association step does meaningfully
+better, and which one — StrongSORT / BoT-SORT / OC-SORT / DeepOCSORT via boxmot.
+
+### Step 1 — boxmot integration
+
+- **`src/track/boxmot_tracker.py`** wraps boxmot's `create_tracker` behind the same
+  `Tracker` Protocol as `ByteTrackTracker`, so run.py swaps trackers on `tracker.type`
+  (strongsort / botsort / ocsort / deepocsort / bytetrack). Tracker type and ReID
+  backbone are config-driven; hyperparameters are boxmot's own per-tracker defaults —
+  nothing tuned to this camera, so the bake-off compares each tracker out of the box.
+- **Protocol change:** `Tracker.update` now takes the frame
+  (`update(detections, frame, frame_index)`). Appearance trackers crop ReID features
+  from it; ByteTrack and OC-SORT are motion-only and ignore it. One unified interface,
+  both paths intact.
+- **Post-hoc ReID is bypassed for boxmot trackers** (`reid.post_hoc_stitch: false` in
+  `configs/cam1_*.yaml`) — they associate on appearance internally, so running our
+  stitch too would double-apply appearance matching. The mobilenet embedder isn't even
+  constructed on that path. `configs/cam1.yaml` keeps `post_hoc_stitch: true` for the
+  ByteTrack baseline. Both modules (`src/reid/embed.py`, `src/reid/stitch.py`) stay for
+  that comparison baseline. Zone hardening, stationarity gate and staff filter are
+  tracker-independent and run on *every* config, so the bake-off varies only the
+  identity-association mechanism.
+- **OC-SORT is the control:** motion-only, no ReID and no post-hoc stitch, to isolate
+  how much appearance association actually buys over pure motion inside boxmot.
+- **Wrapper detail:** boxmot crops every detection for ReID and its `cv2.resize` raises
+  on a zero-area crop, so the wrapper drops detections that collapse to nothing once
+  clamped to the frame (fully past an edge / sub-pixel slivers); all other coordinates
+  pass through untouched, leaving boxmot's motion model unaffected. Not needed on the
+  ByteTrack path, which only embeds in-zone (well inside the frame) boxes.
+
+### Step 1 — OSNet weights resolution (Phase 3 Step 1 deviation closed)
+
+Phase 3 Step 1 fell back to a torchvision ImageNet backbone because torchreid's OSNet
+weights hung >2 min on a Google-Drive download. **Resolved: boxmot's OSNet downloads
+and loads cleanly.** `weights/osnet_x0_25_msmt17.pt` (OSNet x0.25 / MSMT17 — smallest
+OSNet, largest ReID dataset) fetched in ~3s (3.06 MB) and produced 512-d features on a
+smoke test. Honest caveat: in boxmot 12.0.2 this weight is *still* hosted on Google
+Drive (via `gdown`), not boxmot's GitHub releases as first assumed — but at 3 MB the
+file downloads without the virus-scan confirmation dance that hangs large Drive files,
+which is what actually broke Phase 3. It auto-downloads to `weights/` on first run and
+is gitignored, exactly like `yolov8n.pt`.
+
+**Dependency pin:** `boxmot==12.0.2`, the last classic-API release. It exposes
+`create_tracker`/`get_tracker_config` and pins `numpy==1.26.4` (matching the rest of
+the stack), so it coexists with the ByteTrack baseline; the 20/21/22 redesign forces
+numpy 2.2 and ships a broken high-level API. Needs `setuptools<81` (boxmot 12.x imports
+`pkg_resources`). Local sanity checks run in a gitignored `.venv-boxmot` (Python 3.12,
+since boxmot 12.x's torchvision 0.17.x pin has no 3.13 wheel); the remote targets run
+3.10/3.11 where a fresh `requirements.txt` install resolves the whole stack.
+
+### Step 1 — VRAM measurement fix
+
+`perf.yaml` logged only `torch.cuda.max_memory_allocated()`, which counts live tensor
+bytes and understates real device footprint — PyTorch's caching allocator keeps freed
+blocks reserved rather than returning them to the driver. Now logs **both**
+`peak_vram_allocated_gb` and `peak_vram_reserved_gb`, clearly labelled. **We report
+`peak_vram_reserved_gb` against the 16 GB budget** — it's the closer proxy to what
+`nvidia-smi` shows live. `reset_peak_memory_stats()` runs before the loop starts and
+`torch.cuda.synchronize()` runs before either stat is read. (Both read 0.0 on mps/cpu,
+so the meaningful numbers still come from the T4 target.) This means the Phase 3 final
+row's 0.039 GB was an *allocated* figure; the Phase 5 tables report reserved, so those
+numbers aren't directly comparable to the old VRAM column — the full-pipeline winner
+gets a fresh reserved measurement in Step 3.
+
+### Step 2 — bake-off (pending remote runs)
+
+Five configs, same slice as Phase 3 (frames 26700–71000, 9 GT people), everything held
+constant except the tracker + post-hoc-stitch flag: `cam1.yaml` (ByteTrack + post-hoc
+stitch, the comparison baseline), `cam1_strongsort.yaml`, `cam1_botsort.yaml`,
+`cam1_ocsort.yaml`, `cam1_deepocsort.yaml`. Accuracy (count_error, matched, dwell
+MAE/MAPE) from trailbreak; FPS + peak reserved VRAM from a Colab T4, plus a longer-slice
+VRAM stability check. Table + read to follow; no winner picked until the numbers land.

@@ -10,6 +10,12 @@ eval/label/no_overlap_review.yaml
 # large binaries and derived artifacts — not committed
 digital_kiosk.mp4
 yolov8n.pt
+# boxmot ReID backbone weights (auto-downloaded on first run, like yolov8n.pt)
+weights/
+
+# local boxmot sanity-check virtualenv
+.venv-boxmot/
+
 
 # python caches
 __pycache__/

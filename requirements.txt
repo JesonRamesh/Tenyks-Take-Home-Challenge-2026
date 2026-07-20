@@ -7,3 +7,9 @@ torchvision
 ultralytics
 opencv-python
 lap
+# Pinned to the last classic-API boxmot: exposes create_tracker/get_tracker_config
+# and pins numpy==1.26.4 (matches the rest of the stack), so it coexists cleanly with
+# the ByteTrack baseline. Provides StrongSORT/BoT-SORT/OC-SORT/DeepOCSORT + OSNet ReID.
+boxmot==12.0.2
+# boxmot 12.x imports pkg_resources, which setuptools removed in 81+.
+setuptools<81

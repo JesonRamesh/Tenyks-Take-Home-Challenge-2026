@@ -27,13 +27,13 @@ detector:
   device: auto # cuda if available, else mps, else cpu
 
 tracker:
-  type: bytetrack
-  track_high_thresh: 0.5 # detections above this drive confident association
-  track_low_thresh: 0.1 # second-stage association floor
-  new_track_thresh: 0.6 # min score to spawn a brand-new track
-  match_thresh: 0.8 # IoU gate for association
-  track_buffer: 30 # frames a lost track survives before deletion
-  fuse_score: true
+  # boxmot StrongSORT: Kalman motion + OSNet appearance with EMA feature banks.
+  # Hyperparameters are boxmot's own per-tracker defaults, not tuned to this camera.
+  # OSNet x0.25 / MSMT17 (smallest OSNet, largest ReID dataset), auto-downloaded to
+  # weights/ on first run like yolov8n.pt.
+  type: strongsort
+  reid_weights: weights/osnet_x0_25_msmt17.pt
+  half: false # fp16 ReID inference; false keeps fp32 for a clean cross-tracker comparison
 
 reid:
   # Post-hoc appearance re-association: merges tracks ByteTrack fragmented across a
@@ -42,7 +42,7 @@ reid:
   # to within-visit breaks; multi-visit returns exceed gap_frames and stay separate.
   # Bypassed (post_hoc_stitch: false) for a boxmot tracker, which associates on ReID
   # internally, so appearance matching isn't applied twice. See configs/cam1_*.yaml.
-  post_hoc_stitch: true
+  post_hoc_stitch: false
   model: mobilenet_v3_small # torchvision backbone, classifier head removed
   gap_frames: 90 # max frame gap between a track ending and its re-appearance (~3s)
   max_anchor_dist: 250 # px; the re-appearance must be near where the track left off

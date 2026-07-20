@@ -51,9 +51,10 @@ class ByteTrackTracker:
         )
         self._tracker = BYTETracker(args)
 
-    def update(self, detections: list[Detection], frame_index: int) -> list[Track]:
-        # frame_index is part of the interface; BYTETracker keeps its own frame
-        # counter and only needs to be called once per frame in order.
+    def update(self, detections: list[Detection], frame: np.ndarray, frame_index: int) -> list[Track]:
+        # frame and frame_index are part of the interface; ByteTrack is motion-only
+        # so it ignores the pixels, and BYTETracker keeps its own frame counter and
+        # only needs to be called once per frame in order.
         n = len(detections)
         xywh = np.empty((n, 4), dtype=np.float32)
         conf = np.empty(n, dtype=np.float32)

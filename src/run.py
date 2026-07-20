@@ -2,10 +2,14 @@
 
     python -m src.run --video digital_kiosk.mp4 --config configs/cam1.yaml
 
-Pipeline per frame: detect -> track -> ROI gate, embedding each in-zone box.
-Then appearance re-association stitches ByteTrack fragments back into one
-identity before dwell aggregation over the whole video. Writes predictions to
-outputs/tracks.yaml and peak VRAM + measured FPS to outputs/perf.yaml.
+Pipeline per frame: detect -> track -> ROI gate. The tracker is config-driven
+(tracker.type): our ByteTrack wrapper, or a boxmot tracker with appearance
+association built in. When reid.post_hoc_stitch is set (the ByteTrack baseline),
+each in-zone box is embedded and appearance re-association stitches the motion-only
+fragments back into one identity; a boxmot tracker does that association internally,
+so the post-hoc stitch is bypassed to avoid double-applying it. Dwell is aggregated
+over the whole video. Writes predictions to outputs/tracks.yaml and peak VRAM +
+measured FPS to outputs/perf.yaml.
 
 --slice runs only a frame range (the eval_slice in the config, or an explicit
 start/end pair) for fast iteration; the full video is the default.
@@ -27,6 +31,7 @@ from src.dwell.aggregate import aggregate
 from src.reid.embed import Embedder
 from src.reid.stitch import TrackAppearance, stitch
 from src.staff.filter import StaffClassifier
+from src.track.boxmot_tracker import BoxmotTracker
 from src.track.bytetrack import ByteTrackTracker
 from src.zones.roi import anchor, in_zone
 from src.zones.stationarity import is_visit
@@ -73,21 +78,34 @@ def main() -> None:
     detector = YoloDetector(
         det_cfg["model"], det_cfg["confidence"], det_cfg["classes"], det_cfg["imgsz"], device
     )
-    embedder = Embedder(config["reid"]["model"], device)
     staff_clf = StaffClassifier(config["staff"])
-    tracker = ByteTrackTracker(
-        **{
-            key: config["tracker"][key]
-            for key in (
-                "track_high_thresh",
-                "track_low_thresh",
-                "new_track_thresh",
-                "match_thresh",
-                "track_buffer",
-                "fuse_score",
-            )
-        }
-    )
+
+    # Tracker is config-driven. ByteTrack is motion-only and relies on the post-hoc
+    # appearance stitch below; the boxmot trackers associate on ReID internally, so
+    # that stitch is switched off for them (post_hoc_stitch) rather than run twice.
+    tracker_cfg = config["tracker"]
+    post_hoc_stitch = config["reid"]["post_hoc_stitch"]
+    if tracker_cfg["type"] == "bytetrack":
+        tracker = ByteTrackTracker(
+            **{
+                key: tracker_cfg[key]
+                for key in (
+                    "track_high_thresh",
+                    "track_low_thresh",
+                    "new_track_thresh",
+                    "match_thresh",
+                    "track_buffer",
+                    "fuse_score",
+                )
+            }
+        )
+    else:
+        tracker = BoxmotTracker(
+            tracker_cfg["type"], device, tracker_cfg["half"], tracker_cfg.get("reid_weights")
+        )
+    # The post-hoc embedder is only needed for the stitch path; a boxmot tracker
+    # carries its own ReID, so skip loading a second appearance model for it.
+    embedder = Embedder(config["reid"]["model"], device) if post_hoc_stitch else None
 
     cap = cv2.VideoCapture(str(args.video))
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -122,12 +140,12 @@ def main() -> None:
         if not ok or (end_frame is not None and frame_index >= end_frame):
             break
         detections = detector.detect(frame)
-        tracks = tracker.update(detections, frame_index)
+        tracks = tracker.update(detections, frame, frame_index)
         zone_tracks = [track for track in tracks if in_zone(track, polygon, box_depth_frac)]
         if zone_tracks:
             boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
-            embeddings = embedder.embed(frame, boxes)
             staff_flags = staff_clf.staff_frames(frame, boxes)
+            embeddings = embedder.embed(frame, boxes) if post_hoc_stitch else [None] * len(boxes)
             for track, embedding, staff_flag, box in zip(zone_tracks, embeddings, staff_flags, boxes):
                 point = anchor(track)
                 in_zone_frames.setdefault(track.track_id, []).append(frame_index)
@@ -141,32 +159,39 @@ def main() -> None:
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                     cv2.imwrite(str(staff_debug_dir / f"f{frame_index}_t{track.track_id}.png"), vis)
                     staff_debug_saved += 1
-                if track.track_id in embedding_sum:
-                    embedding_sum[track.track_id] += embedding
-                    embedding_count[track.track_id] += 1
-                else:
-                    embedding_sum[track.track_id] = embedding.copy()
-                    embedding_count[track.track_id] = 1
-                    first_anchor[track.track_id] = point
-                last_anchor[track.track_id] = point
+                # Appearance accumulation only feeds the post-hoc stitch; boxmot
+                # trackers already carry a persistent id, so skip it for them.
+                if post_hoc_stitch:
+                    if track.track_id in embedding_sum:
+                        embedding_sum[track.track_id] += embedding
+                        embedding_count[track.track_id] += 1
+                    else:
+                        embedding_sum[track.track_id] = embedding.copy()
+                        embedding_count[track.track_id] = 1
+                        first_anchor[track.track_id] = point
+                    last_anchor[track.track_id] = point
         frame_index += 1
     elapsed = time.time() - start
     cap.release()
 
-    appearances = {
-        track_id: TrackAppearance(
-            first_frame=frames[0],
-            last_frame=frames[-1],
-            first_anchor=first_anchor[track_id],
-            last_anchor=last_anchor[track_id],
-            embedding=_unit(embedding_sum[track_id] / embedding_count[track_id]),
+    if post_hoc_stitch:
+        appearances = {
+            track_id: TrackAppearance(
+                first_frame=frames[0],
+                last_frame=frames[-1],
+                first_anchor=first_anchor[track_id],
+                last_anchor=last_anchor[track_id],
+                embedding=_unit(embedding_sum[track_id] / embedding_count[track_id]),
+            )
+            for track_id, frames in in_zone_frames.items()
+        }
+        reid_cfg = config["reid"]
+        id_map = stitch(
+            appearances, reid_cfg["gap_frames"], reid_cfg["max_anchor_dist"], reid_cfg["min_similarity"]
         )
-        for track_id, frames in in_zone_frames.items()
-    }
-    reid_cfg = config["reid"]
-    id_map = stitch(
-        appearances, reid_cfg["gap_frames"], reid_cfg["max_anchor_dist"], reid_cfg["min_similarity"]
-    )
+    else:
+        # boxmot tracker ids are already persistent across the video; no re-association.
+        id_map = {track_id: track_id for track_id in in_zone_frames}
     merged_frames: dict[int, list[int]] = {}
     merged_anchors: dict[int, list[tuple[float, float]]] = {}
     merged_staff_hits: dict[int, int] = {}
@@ -222,18 +247,30 @@ def main() -> None:
     (args.out_dir / "tracks.yaml").write_text(yaml.safe_dump(_intervals(records), sort_keys=False))
     (args.out_dir / "staff.yaml").write_text(yaml.safe_dump(_intervals(staff_records), sort_keys=False))
 
-    # torch.cuda.max_memory_allocated only reports on CUDA; on mps/cpu it is 0 and
-    # peak VRAM must be re-measured on the T4 target.
-    peak_vram_gb = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0.0
+    # VRAM peaks only report on CUDA (0 on mps/cpu), so peak VRAM must be measured on
+    # the T4 target. reset_peak_memory_stats ran before the loop; synchronize so any
+    # async kernels finish before the peaks are read. Log both allocated (live tensor
+    # bytes) and reserved (allocator's total device reservation, incl. freed-but-cached
+    # blocks). reserved is the number reported against the 16 GB budget: it is the
+    # closer proxy to what nvidia-smi shows live, since PyTorch's caching allocator
+    # holds freed memory rather than returning it to the driver.
+    if device == "cuda":
+        torch.cuda.synchronize()
+        peak_vram_allocated_gb = torch.cuda.max_memory_allocated() / 1e9
+        peak_vram_reserved_gb = torch.cuda.max_memory_reserved() / 1e9
+    else:
+        peak_vram_allocated_gb = peak_vram_reserved_gb = 0.0
     # frame_index ends at the last frame read; subtract the seek offset so a slice
     # run reports its processed-frame count and true throughput, not the whole video.
     processed = frame_index - start_frame
     perf = {
         "device": device,
+        "tracker": tracker_cfg["type"],
         "frames": processed,
         "elapsed_s": round(elapsed, 2),
         "fps": round(processed / elapsed, 2),
-        "peak_vram_gb": round(peak_vram_gb, 3),
+        "peak_vram_allocated_gb": round(peak_vram_allocated_gb, 3),
+        "peak_vram_reserved_gb": round(peak_vram_reserved_gb, 3),
     }
     (args.out_dir / "perf.yaml").write_text(yaml.safe_dump(perf, sort_keys=False))
 
