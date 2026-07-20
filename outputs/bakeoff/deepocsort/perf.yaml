@@ -1,0 +1,7 @@
+device: cuda
+tracker: deepocsort
+frames: 44300
+elapsed_s: 375.48
+fps: 117.98
+peak_vram_allocated_gb: 0.192
+peak_vram_reserved_gb: 0.312

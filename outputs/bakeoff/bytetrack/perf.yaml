@@ -1,0 +1,7 @@
+device: cuda
+tracker: bytetrack
+frames: 44300
+elapsed_s: 188.88
+fps: 234.55
+peak_vram_allocated_gb: 0.172
+peak_vram_reserved_gb: 0.315
