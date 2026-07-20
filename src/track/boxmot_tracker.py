@@ -19,7 +19,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import torch
 from boxmot import create_tracker, get_tracker_config
 
 from src.detect.base import Detection
@@ -28,6 +27,13 @@ from src.track.base import Track
 
 class BoxmotTracker:
     def __init__(self, tracker_type: str, device: str, half: bool, reid_weights: str | None):
+        # boxmot's select_device wants a device *index* ("0"), not torch's "cuda"
+        # string, which it parses as a 4-GPU request and rejects. Translate our
+        # resolved device name to boxmot's convention; "cpu"/"mps"/"cuda:N" pass through.
+        if device == "cuda":
+            device = "0"
+        elif device.startswith("cuda:"):
+            device = device.split(":", 1)[1]
         # OC-SORT is motion-only and takes no ReID weights; create_tracker ignores
         # the argument for it, so a None weight path is fine there.
         weights = Path(reid_weights) if reid_weights else None
@@ -35,7 +41,7 @@ class BoxmotTracker:
             tracker_type,
             get_tracker_config(tracker_type),
             reid_weights=weights,
-            device=torch.device(device),
+            device=device,
             half=half,
             per_class=False,
         )
