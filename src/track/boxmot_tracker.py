@@ -37,6 +37,10 @@ class BoxmotTracker:
         # OC-SORT is motion-only and takes no ReID weights; create_tracker ignores
         # the argument for it, so a None weight path is fine there.
         weights = Path(reid_weights) if reid_weights else None
+        # boxmot auto-downloads the backbone but does not create the target directory,
+        # and gdown lists it before writing, so make it here (like yolov8n.pt's dir).
+        if weights is not None:
+            weights.parent.mkdir(parents=True, exist_ok=True)
         self._tracker = create_tracker(
             tracker_type,
             get_tracker_config(tracker_type),
