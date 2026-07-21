@@ -43,10 +43,18 @@ reid:
   # Bypassed (post_hoc_stitch: false) for a boxmot tracker, which associates on ReID
   # internally, so appearance matching isn't applied twice. See configs/cam1_*.yaml.
   post_hoc_stitch: true
-  model: mobilenet_v3_small # torchvision backbone, classifier head removed
-  gap_frames: 90 # max frame gap between a track ending and its re-appearance (~3s)
-  max_anchor_dist: 250 # px; the re-appearance must be near where the track left off
-  min_similarity: 0.8 # cosine floor on mean appearance embeddings to merge
+  # OSNet (a real person-ReID model) replaces the mobilenet ImageNet backbone: the
+  # diagnostic showed ImageNet features can't separate same- from different-person, the
+  # dominant merge blocker. A .pt name selects the boxmot ReID backbone; a bare name
+  # (e.g. mobilenet_v3_small) still selects the torchvision backbone.
+  model: weights/osnet_x0_25_msmt17.pt
+  # Widened to re-link multi-minute re-entries now that OSNet gives a trustworthy
+  # appearance signal: on the dense slice this took count_error +95 -> +3 (near the
+  # oracle's +0 ceiling) and match rate 0/9 -> 4/9. The crowding invariant still blocks
+  # merging ever-simultaneous tracks, so a wider gap can't recreate the collapse.
+  gap_frames: 3000 # max frame gap between a track ending and its re-appearance (~100s)
+  max_anchor_dist: 400 # px; a returning person may re-enter a little off from where they left
+  min_similarity: 0.6 # cosine floor on mean OSNet embeddings to merge
 
 stationarity:
   # A track counts as a kiosk visit only if it lingers: either its in-ROI dwell
