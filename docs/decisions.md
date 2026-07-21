@@ -285,11 +285,190 @@ row's 0.039 GB was an *allocated* figure; the Phase 5 tables report reserved, so
 numbers aren't directly comparable to the old VRAM column — the full-pipeline winner
 gets a fresh reserved measurement in Step 3.
 
-### Step 2 — bake-off (pending remote runs)
+### Step 2 — bake-off results
 
 Five configs, same slice as Phase 3 (frames 26700–71000, 9 GT people), everything held
-constant except the tracker + post-hoc-stitch flag: `cam1.yaml` (ByteTrack + post-hoc
-stitch, the comparison baseline), `cam1_strongsort.yaml`, `cam1_botsort.yaml`,
-`cam1_ocsort.yaml`, `cam1_deepocsort.yaml`. Accuracy (count_error, matched, dwell
-MAE/MAPE) from trailbreak; FPS + peak reserved VRAM from a Colab T4, plus a longer-slice
-VRAM stability check. Table + read to follow; no winner picked until the numbers land.
+constant except the tracker + post-hoc-stitch flag. Accuracy (count/dwell) from
+trailbreak (RTX 4070 Ti Super); FPS + peak *reserved* VRAM from a Colab T4 on a 3k-frame
+dense sub-slice (the worst case — most concurrent people → slowest, highest VRAM):
+
+| config                          | pred | count_err | matched | dwell MAE | dwell MAPE | FPS (T4) | VRAM_resv |
+| ------------------------------- | ---- | --------- | ------- | --------- | ---------- | -------- | --------- |
+| bytetrack (ByteTrack + post-hoc)| 79   | +70       | 2/9     | 22.14s    | 12.32%     | 35.9     | 0.201 GB  |
+| strongsort + OSNet              | 131  | +122      | 1/9     | 41.36s\*  | 28.01%\*   | 27.2     | 0.331 GB  |
+| botsort + OSNet                 | 79   | +70       | 2/9     | 18.35s    | 10.15%     | 28.7     | 0.331 GB  |
+| ocsort (motion-only control)    | 116  | +107      | 1/9     | 41.36s\*  | 28.01%\*   | 57.5     | 0.197 GB  |
+| deepocsort + OSNet              | 138  | +129      | 2/9     | 24.55s    | 16.69%     | 21.5     | 0.331 GB  |
+
+\* single matched pair — dwell is noise at matched=1; only the matched=2 rows compare.
+
+Read:
+- **VRAM is a non-issue.** Peak reserved tops out at **0.331 GB (~2% of the 16 GB
+  budget)** and is flat across trackers. Stability check: StrongSORT reserved VRAM is
+  0.331 GB at both 3k and 15k frames — identical, so the per-track feature bank
+  plateaus, no leak.
+- **Built-in ReID did not beat the bolted-on stitch.** Three of four boxmot trackers
+  are *worse* on count than ByteTrack + post-hoc (+122 / +107 / +129 vs +70). Only
+  **BoT-SORT ties the baseline count (+70) and edges its dwell** (MAE 18.35 vs 22.14,
+  MAPE 10.15% vs 12.32%) — out of the box, no custom stitch. The differentiator is the
+  base association engine, not appearance: ByteTrack-lineage (ByteTrack, BoT-SORT) both
+  land at 79; observation-centric SORT (OC-SORT/DeepOCSORT) and classic StrongSORT
+  fragment more here. The control confirms it — bolting OSNet onto OC-SORT (→ DeepOCSORT)
+  makes *count* worse (+107 → +129), not better.
+- **The core problem is unmoved.** Match rate stays at **2/9 at best across every
+  tracker**, baseline included — on this dense slice the crowding-induced one-to-one
+  matching ceiling caps identity recovery, exactly as Phase 3 predicted, and neither
+  post-hoc nor built-in appearance breaks it.
+- **Throughput (worst-case window):** OC-SORT (57.5) and ByteTrack (35.9) clear the ~30
+  FPS source rate; BoT-SORT (28.7) sits just under (full-video average would be higher);
+  StrongSORT (27.2) and DeepOCSORT (21.5) are below. The cost is boxmot's ECC
+  camera-motion compensation — wasted work on a fixed camera.
+
+Bottom line: not a decisive win for built-in over bolted-on — roughly a tie, with
+BoT-SORT trading ~20% throughput for a modest dwell gain and a simpler pipeline (no
+stitch module). Tracker selection (Step 3) deferred pending the overlay + diagnostic
+review below.
+
+### Step A — overlay video renderer
+
+`src/overlay/renderer.py` draws the full-pipeline result on the source video: per-track
+boxes coloured consistently by id (stable golden-angle hue per id), the id + running
+dwell-so-far, a live "Current count: N" of in-zone non-staff people, and staff tracks in
+red with a STAFF tag (rendered, not hidden, so where the staff filter fires is visible
+for review). The ROI polygon is outlined for context. Output path, codec, and the
+rendered span (inherited from the artifact's frame range, i.e. run.py `--slice`) are
+config-driven (`overlay:` block).
+
+`tracks.yaml` is per-visit intervals with no per-frame boxes, so run.py gained an opt-in
+per-frame render artifact (`render_frames.yaml`, gated by `overlay.emit_render_frames`,
+written into `--out-dir`): each surviving in-zone box per frame resolved to its canonical
+id + kind (customer / staff), boxes the stationarity gate dropped excluded. The renderer
+consumes that + the video — same full-pipeline provenance as tracks.yaml — so one slice
+pass feeds both the overlay and the diagnostic. Off by default so the full-video
+analytics run isn't burdened with a 216k-frame artifact. Rendered once on the dense slice
+→ `outputs/overlay_slice.mp4`.
+
+**Robustness fix uncovered while rendering:** a sub-pixel-wide in-zone detection clamps to
+a zero-area crop that `cv2.resize` rejects, aborting the run. It surfaced re-running the
+slice locally (MPS); trailbreak's CUDA detector floats never produced the degenerate box,
+so the committed numbers are unaffected. `src/reid/embed.py` now clamps every crop to a
+>=1px extent within frame bounds — same class of fix as the boxmot wrapper's degenerate-box
+drop. The staff classifier already guarded empty crops.
+
+### Step B — diagnostic against the current best pipeline (dense slice)
+
+Re-ran `diagnose_baseline.py` against the current best pipeline's slice `tracks.yaml`
+(ByteTrack + post-hoc stitch + zone hardening + stationarity + staff; local MPS run,
+86 predicted tracks vs trailbreak's 79 — a detection-float difference that doesn't change
+the structure), not the Phase 2 baseline. The question: are the ~77 excess predicted
+tracks fixable model errors or structural?
+
+- **Every excess track is real-person fragmentation — 0 / 86 have zero GT overlap.** The
+  Phase 3 filters (zone hardening + stationarity + staff) removed 100% of walk-throughs,
+  phantoms, and staff on this slice: not one surviving predicted track fails to overlap a
+  real GT customer. The overcount is entirely the same person counted many times, never a
+  spurious detection. (Phase 2 baseline had 69/354 zero-overlap tracks; that class is now
+  empty.)
+- **Fragmentation is concentrated in two structural regimes:**
+  - *Long dwellers under crowd occlusion* (P1/P2/P3, frames ~26.7k–42k): shatter into
+    **38 / 32 / 16** overlapping tracks. Crucially many of these tracks *overlap in time*
+    (e.g. tracks 5071 / 5076 / 5081 all span ~32.2k–33.5k) — they are simultaneous, not
+    sequential, so the gap-stitch cannot merge them by construction (it links a track's end
+    to a later track's start). This is detector/tracker churn under sustained occlusion in a
+    tight standing cluster over 300–500s dwells.
+  - *Multi-minute re-entries* (P4–P9): each return gets a **different** predicted id
+    (P4 → 12038, 15623, 18097 across its three visits), because the stitch is deliberately
+    scoped to ~3s gaps and these gaps are minutes. Compounded by *crowding collapse*: single
+    tracks are the best match for several people at once (track 15623 best-matches P4, P6 and
+    P8; tracks 15756 / 16401 are shared between P7 and P9), which one-to-one matching can't
+    resolve — so match rate stays at 2/9 regardless of tracker (confirmed by the Step 2
+    bake-off).
+- **Read: the remaining error is structural, not spurious-detection cleanup.** The filters
+  are saturated (no false tracks left to remove), so further count gains must come from
+  *merging* real fragments, which splits into: (a) a model-fixable slice — long-gap ReID to
+  re-link multi-minute re-entries — bounded by precision risk (a looser gap/appearance gate
+  starts merging distinct people, and the ImageNet/OSNet appearance signal is already the
+  weak link), and (b) a largely inherent slice — simultaneous overlapping tracks in dense
+  occlusion, which no sequential stitch and no built-in-ReID tracker in the bake-off
+  resolved. This is the case for evaluating a segmentation/instance approach (queued
+  separately) against the crowd-occlusion fragments, and for documenting the multi-minute
+  re-entry collapse as a precision-bounded limitation rather than chasing it with looser
+  thresholds. Frame ranges per fragment are in the diagnostic output for review against
+  `overlay_slice.mp4`.
+
+## Phase 5 (cont.) — crowding-collapse fix, coverage diagnostics, OSNet long-gap merge
+
+### Crowding-collapse correctness fix
+
+The overlay exposed one canonical id drawn on several people at once. Cause: the post-hoc
+stitch's pairwise gap check blocked *directly* overlapping merges, but union-find is
+transitive — A can link to B and to C (each disjoint from A) while B and C overlap, so a
+whole queue collapses into one id. Traced id 15756: it absorbed **18 raw tracks with 27
+simultaneously-active pairs**. Fix (`src/reid/stitch.py`): a hard invariant — two identities
+never merge if their segments were ever simultaneously active, checked across whole merged
+groups before any spatial/appearance gate. Not a threshold. Pinned by `eval/tests/test_stitch.py`.
+Result on the slice: **2472 simultaneous-id collapse instances → 0**, purity 100%. Later
+optimized from an O(N^3) member rescan to an incremental per-group interval list
+(~O(N^2), verified identical id_maps, ~2200x faster on 355 tracks) so it scales to the full
+video.
+
+The fix *worsens* the naive metrics (count_error +77→+95, matched 1→0) because the collapse
+was masking fragmentation and its long spurious tracks were accidentally satisfying the
+IoU≥0.5 matcher — which motivated better diagnostics.
+
+### Coverage/purity metrics + oracle ceiling (extends eval, strict metric kept)
+
+`eval/metrics.py` gains `coverage_report`: per-GT-person **coverage** (fraction of real frames
+with any predicted box) and **fragment count**, and per-track **purity** (largest share of a
+track's frames on one GT person). Needs per-frame boxes, so run.py emits them via the render
+artifact / `stitch_state.pkl` dump. Current best pipeline on the slice: mean coverage **76%**
+(P4/P5 only 54–61% — a real recall gap), purity **100%** (confirms the invariant).
+
+Oracle stitcher (diagnostic only, GT used purely as a ceiling): perfectly merging the
+fragments that already exist gives **count_error +0, 9/9 matched** (any-overlap) — proving the
+raw fragments are sufficient and **count is a merge-algorithm bottleneck, not a detection
+one**. Argmax-assignment oracle (each fragment to one person) collapses to 4 people / 15s dwell,
+exposing that temporal-only GT cannot separate co-present people — so dwell has a co-presence
+ceiling stitching can't cross.
+
+### OSNet long-gap merge (the merge improvement)
+
+Merge-blocker analysis on the raw fragments: mobilenet-ImageNet appearance was the dominant
+blocker (116/212 same-person pairs) and its same/different cosine distributions **fully
+overlap** (same 10th pct 0.169 vs different 90th pct 0.824) — no threshold works, so widening
+the gap alone would over-merge. Swapped the post-hoc embedder to **OSNet** (the boxmot
+person-ReID backbone; `src/reid/embed.py`, config-driven — a `.pt` name selects it), which
+separates far better (same 10th pct 0.492 vs different 90th pct 0.693). With OSNet, widened
+`configs/cam1.yaml` reid to **gap 3000 / anchor 400 / sim 0.6** (offline sweep on the dumped
+state, exact replay of the pipeline):
+
+| config | pred | count_err | matched | purity |
+| ------ | ---- | --------- | ------- | ------ |
+| fixed stitch (mobilenet, gap 90) | 104 | +95 | 0/9 | 1.00 |
+| OSNet gap 3000 / 400 / 0.6       | 12  | **+3** | **4/9** | 0.90 |
+
+count_error **+95 → +3** (near the +0 oracle ceiling), match rate 0→4/9, at a modest precision
+cost (purity 1.00→0.90: OSNet's 0.49–0.69 overlap band lets a few look-alike different people
+merge across a gap). Dwell stays ~40–67s, the co-presence ceiling. Slice numbers are local MPS;
+full-video accuracy re-runs on GPU next.
+
+### Staff re-check under the long-gap config
+
+The long-gap merge is a new mechanism (sequential, appearance-gated) that could dilute a staff
+track into a customer differently from the simultaneous-merge case. On the slice: **0 staff
+flagged, 0 false positives**, and the merged tracks' staff-frame fractions max at 0.026 (vs the
+0.7 threshold) — no spurious flags, no near-flips. Caveat: the slice has no real staff (they sit
+outside 26700–71000), so the dilution of a *real* staff track is only testable on the full video.
+
+### Children — diagnosis (no filter built)
+
+The pipeline has no child concept, like it originally had no staff concept; GT excludes
+accompanying children (counted only if they independently interact). The 5 Phase-3
+`missed_customer` flags were single-frame (0.0s) blips already dropped by the stationarity gate —
+not missed customers. Measuring the current pipeline: short-box tracks exist and box height is
+only weakly explained by distance (corr 0.16), but height **conflates children with
+kiosk-occluded adults** — of the three shortest tracks, two are genuine children (14301, 12006)
+and one is a real customer occluded by the counter (14635). So children do contribute to the
+residual count (≈2 of the slice's +3), but a naive height/aspect filter would false-positive
+occluded-adult customers. Decision: size the child impact on the full video first, and design a
+confound-aware signal, before building any filter.
