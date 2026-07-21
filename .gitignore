@@ -10,6 +10,10 @@ eval/label/no_overlap_review.yaml
 # large binaries and derived artifacts — not committed
 digital_kiosk.mp4
 yolov8n.pt
+# overlay render outputs (large video / per-frame artifact, regenerated on demand)
+*.mp4
+outputs/**/render_frames.yaml
+outputs/render_frames.yaml
 # boxmot ReID backbone weights (auto-downloaded on first run, like yolov8n.pt)
 weights/
 

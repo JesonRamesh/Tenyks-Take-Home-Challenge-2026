@@ -87,3 +87,12 @@ eval_slice: [26700, 71000]
 
 eval:
   min_iou: 0.5 # min temporal IoU for a predicted track to match a GT person
+
+overlay:
+  # The renderer draws the pipeline's surviving boxes per frame, which the interval
+  # tracks.yaml can't carry, so run.py emits render_frames.yaml (into --out-dir) when
+  # this is on. Keep it off for full-video analytics runs, where a per-frame artifact
+  # over 216k frames would be large. Output path and codec drive src/overlay/renderer.py.
+  emit_render_frames: true
+  output_path: outputs/overlay_slice.mp4
+  codec: mp4v # OpenCV VideoWriter fourcc

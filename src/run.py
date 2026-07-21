@@ -85,6 +85,12 @@ def main() -> None:
     # that stitch is switched off for them (post_hoc_stitch) rather than run twice.
     tracker_cfg = config["tracker"]
     post_hoc_stitch = config["reid"]["post_hoc_stitch"]
+    # Optional per-frame render artifact for the overlay renderer: the surviving in-zone
+    # boxes (post stitch / stationarity / staff) on each frame, which tracks.yaml's
+    # interval form can't carry. Off unless a config asks, so plain analytics runs and
+    # the full-video pass aren't burdened with a large per-frame file.
+    overlay_cfg = config.get("overlay")
+    emit_render_frames = bool(overlay_cfg) and overlay_cfg.get("emit_render_frames", False)
     if tracker_cfg["type"] == "bytetrack":
         tracker = ByteTrackTracker(
             **{
@@ -125,6 +131,9 @@ def main() -> None:
     # Frames of each track whose crop matched the staff uniform; the flag is a track
     # majority, so a fraction of these over the track's total in-zone frames decides.
     staff_hits: dict[int, int] = {}
+    # frame -> [(raw_track_id, box), ...] for every in-zone box, populated only when a
+    # render artifact was requested; resolved to canonical id + kind after the loop.
+    frame_render: dict[int, list[tuple[int, tuple[float, float, float, float]]]] = {}
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
@@ -151,6 +160,8 @@ def main() -> None:
                 in_zone_frames.setdefault(track.track_id, []).append(frame_index)
                 track_anchors.setdefault(track.track_id, []).append(point)
                 staff_hits[track.track_id] = staff_hits.get(track.track_id, 0) + staff_flag
+                if emit_render_frames:
+                    frame_render.setdefault(frame_index, []).append((track.track_id, box))
                 if staff_flag and staff_debug_saved < args.staff_debug:
                     vis = frame.copy()
                     x1b, y1b, x2b, y2b = (int(v) for v in box)
@@ -246,6 +257,28 @@ def main() -> None:
 
     (args.out_dir / "tracks.yaml").write_text(yaml.safe_dump(_intervals(records), sort_keys=False))
     (args.out_dir / "staff.yaml").write_text(yaml.safe_dump(_intervals(staff_records), sort_keys=False))
+
+    if emit_render_frames:
+        # Resolve every collected in-zone box to its canonical id and kind (0 customer,
+        # 1 staff), dropping boxes whose track the stationarity gate removed as a
+        # walk-through. Rows are [canonical_id, x1, y1, x2, y2, kind] per frame.
+        customer_ids, staff_ids = set(customer_frames), set(staff_frames)
+        rendered: dict[int, list[list[int]]] = {}
+        for index, entries in frame_render.items():
+            rows = []
+            for raw_id, box in entries:
+                canonical = id_map[raw_id]
+                if canonical in customer_ids:
+                    kind = 0
+                elif canonical in staff_ids:
+                    kind = 1
+                else:
+                    continue
+                rows.append([canonical, int(box[0]), int(box[1]), int(box[2]), int(box[3]), kind])
+            if rows:
+                rendered[index] = rows
+        artifact = {"fps": fps, "start_frame": start_frame, "end_frame": frame_index, "frames": rendered}
+        (args.out_dir / "render_frames.yaml").write_text(yaml.safe_dump(artifact, sort_keys=False))
 
     # VRAM peaks only report on CUDA (0 on mps/cpu), so peak VRAM must be measured on
     # the T4 target. reset_peak_memory_stats ran before the loop; synchronize so any
