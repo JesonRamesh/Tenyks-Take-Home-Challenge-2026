@@ -56,6 +56,54 @@ class EvalResult:
     fps: float
 
 
+@dataclass
+class PersonCoverage:
+    person_id: str | int
+    gt_frames: int
+    fragment_count: int  # distinct predicted tracks that share any frame with this person
+    coverage: float  # fraction of the person's GT frames with >= 1 predicted box on them
+
+
+def coverage_report(
+    pred_track_frames: dict[int, set[int]],
+    gt_person_frames: dict[str | int, set[int]],
+) -> tuple[list[PersonCoverage], dict[int, float]]:
+    """Partial-credit companions to the strict IoU matcher, computed on per-frame sets.
+
+    The binary IoU>=0.5 match can't tell "captured most of a person but split across
+    fragments" from "missed them". These do:
+
+    - coverage (per GT person): fraction of their real frames on which any predicted
+      track has a box. Recall-like partial credit the binary matcher discards.
+    - fragment_count (per GT person): how many distinct tracks that presence is split
+      across (the same temporal-overlap notion the diagnostic uses).
+    - purity (per predicted track): the largest share of a track's frames that fall on a
+      single GT person. 1.0 means the track never spans two people -- the invariant the
+      crowding-collapse fix enforces, so this should read ~1.0 everywhere post-fix.
+    """
+    all_pred_frames: set[int] = set().union(*pred_track_frames.values()) if pred_track_frames else set()
+    people = [
+        PersonCoverage(
+            person_id=person_id,
+            gt_frames=len(person_frames),
+            fragment_count=sum(
+                1 for track_frames in pred_track_frames.values() if not track_frames.isdisjoint(person_frames)
+            ),
+            coverage=len(person_frames & all_pred_frames) / len(person_frames) if person_frames else 0.0,
+        )
+        for person_id, person_frames in gt_person_frames.items()
+    ]
+    purity = {
+        track_id: (
+            max((len(track_frames & pf) for pf in gt_person_frames.values()), default=0) / len(track_frames)
+            if track_frames
+            else 0.0
+        )
+        for track_id, track_frames in pred_track_frames.items()
+    }
+    return people, purity
+
+
 def evaluate(
     predictions: list[TrackInterval],
     ground_truth: list[PersonInterval],

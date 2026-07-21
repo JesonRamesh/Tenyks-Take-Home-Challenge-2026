@@ -280,6 +280,24 @@ def main() -> None:
         artifact = {"fps": fps, "start_frame": start_frame, "end_frame": frame_index, "frames": rendered}
         (args.out_dir / "render_frames.yaml").write_text(yaml.safe_dump(artifact, sort_keys=False))
 
+        # Dump the raw per-track state (before stitch) so the merge + downstream gates can
+        # be replayed and tuned offline with different thresholds, without re-running
+        # detection. Post-hoc path only; pickled because frame lists are ragged.
+        if post_hoc_stitch:
+            import pickle
+
+            state = {
+                "fps": fps,
+                "appearances": {
+                    tid: (a.first_frame, a.last_frame, a.first_anchor, a.last_anchor, a.embedding)
+                    for tid, a in appearances.items()
+                },
+                "in_zone_frames": in_zone_frames,
+                "track_anchors": track_anchors,
+                "staff_hits": staff_hits,
+            }
+            (args.out_dir / "stitch_state.pkl").write_bytes(pickle.dumps(state))
+
     # VRAM peaks only report on CUDA (0 on mps/cpu), so peak VRAM must be measured on
     # the T4 target. reset_peak_memory_stats ran before the loop; synchronize so any
     # async kernels finish before the peaks are read. Log both allocated (live tensor
