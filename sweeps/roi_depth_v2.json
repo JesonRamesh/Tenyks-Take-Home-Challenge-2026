@@ -1,0 +1,50 @@
+[
+  {
+    "name": "depth0.4",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "kiosk_roi": {
+      "box_depth_frac": 0.4
+    }
+  },
+  {
+    "name": "depth0.5",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "kiosk_roi": {
+      "box_depth_frac": 0.5
+    }
+  },
+  {
+    "name": "depth0.6",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "kiosk_roi": {
+      "box_depth_frac": 0.6
+    }
+  },
+  {
+    "name": "depth0.7",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "kiosk_roi": {
+      "box_depth_frac": 0.7
+    }
+  }
+]

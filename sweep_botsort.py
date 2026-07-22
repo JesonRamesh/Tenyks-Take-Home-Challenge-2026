@@ -68,6 +68,10 @@ def main() -> None:
             # sweep, against the real pipeline rather than a replay of an older one.
             if "reid" in point:
                 config["reid"] = {**base["reid"], **point["reid"]}
+            # ...and the zone gate, so the ROI depth can be swept on exactly the same
+            # cached detections and scored by the same harness as everything else.
+            if "kiosk_roi" in point:
+                config["kiosk_roi"] = {**base["kiosk_roi"], **point["kiosk_roi"]}
             # Coverage/purity need the per-frame artifact, so force it on for scoring.
             config["overlay"] = {**base.get("overlay", {}), "emit_render_frames": True}
             config_path = run_dir / "config.yaml"

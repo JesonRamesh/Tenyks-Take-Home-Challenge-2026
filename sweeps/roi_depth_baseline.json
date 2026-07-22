@@ -1,0 +1,30 @@
+[
+  {
+    "name": "depth0.4",
+    "params": {},
+    "kiosk_roi": {
+      "box_depth_frac": 0.4
+    }
+  },
+  {
+    "name": "depth0.5",
+    "params": {},
+    "kiosk_roi": {
+      "box_depth_frac": 0.5
+    }
+  },
+  {
+    "name": "depth0.6",
+    "params": {},
+    "kiosk_roi": {
+      "box_depth_frac": 0.6
+    }
+  },
+  {
+    "name": "depth0.7",
+    "params": {},
+    "kiosk_roi": {
+      "box_depth_frac": 0.7
+    }
+  }
+]
