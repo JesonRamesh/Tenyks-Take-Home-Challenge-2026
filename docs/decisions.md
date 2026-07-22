@@ -472,3 +472,104 @@ and one is a real customer occluded by the counter (14635). So children do contr
 residual count (≈2 of the slice's +3), but a naive height/aspect filter would false-positive
 occluded-adult customers. Decision: size the child impact on the full video first, and design a
 confound-aware signal, before building any filter.
+
+## Phase 5 (cont. 2) — staff-dilution bug + fix, and detector diagnostics
+
+### Staff-dilution / phantom-sliver bug (Section-1 diagnostic) + fix
+
+A diagnostic on the staff window (113000–119000, confirmed staff-680) found the staff filter
+miscounting staff as a customer under the long-gap OSNet config — the dilution the earlier
+"Staff re-check" flagged as untested, now confirmed and fixed. Trace: the detector boxes thin
+vertical slivers of kiosk signage as "people" (~4px wide, w/h ~1:60); these phantom tracks pass
+the zone gate, cluster at OSNet cosine ~0.95 (similar background), and merge into the real staff
+track via a marginal 0.633 bridge. The staff person's own high-signal track (raw 904, 71.5%
+staff frames) is pooled with 0%-staff phantom frames, dropping the merged staff fraction to
+46.9% < 0.7 → staff reclassified as customer (rendered as a customer, counted wrong).
+
+Fix (two parts, plus tests):
+- **Aspect gate** (`src/zones/roi.py`, `kiosk_roi.min_box_aspect: 0.1`): `in_zone` rejects boxes
+  with width/height below 0.1. Reasoned from the bimodal data — slivers ~0.02, real people
+  ≥0.15, empty gap 0.08–0.15 — so it drops phantom slivers before they form tracks.
+- **Dominant-segment staff verdict** (`src/staff/filter.py::is_staff_track`): a merged track is
+  staff if its largest constituent segment is majority-uniform, not the pooled fraction, so a
+  real staff track isn't diluted below threshold by merged non-uniform segments. Identical to the
+  old rule for an unmerged track.
+- Regression tests (`eval/tests/test_staff.py`): the 500fr@72% + 300fr@0% dilution flags staff;
+  a 4×234 sliver is rejected by `in_zone`. `ultralytics==8.4.102` pinned (Section-6 drift).
+
+Verified on the staff window: raw tracks 18→8 (slivers gone), staff fraction 46.9%→**72.1%**,
+staff-680 now flagged STAFF (0 false positives), rendered with STAFF styling, count corrected.
+
+### Other diagnostic findings (Sections 2–6)
+
+- **Stitch O(N²) optimization is correct** — identical id_maps to the O(N³) version on the staff,
+  crowd, and a never-tuned 140000–150000 window.
+- **Generalization (untouched 103000–113000, 4 GT): no overfit** — coverage 97%, purity 0.98,
+  count_error +2, better than the denser tuning slice.
+- **Detector recall in Slice B is not the bottleneck** — both GT customers detected ≥0.5 in 15/16
+  sampled frames; the missing boxes are coverage/proximity gaps, not detector misses.
+- **Env drift:** ultralytics was unpinned (now pinned); local runs are MPS, remote CUDA, so
+  detection floats differ (86 vs 79 tracks on the same slice) — local slice metrics aren't
+  bit-identical to the CUDA full-video run.
+
+### Detector merge (two adjacent people → one box) — sizing only, no fix
+
+Frame 26800: YOLOv8n emits one box over a close couple. Pre-NMS (near-off, iou 0.99) it proposes
+both people (man 0.78, woman 0.70, mutual IoU 0.175) plus a wide encompassing box; standard NMS
+(0.45–0.95) always collapses to one, a *lower* threshold makes it worse, and only near-disabling
+NMS recovers both — at the cost of duplicate boxes. So NMS tuning is not a clean fix. RT-DETR
+(NMS-free) separates them cleanly (0.92 / 0.91) but costs ~14× latency (142 vs ~10 ms/frame) and
+~11× params (33M vs 3M). Frequency on Slice B: the automatic classifier flags 36.8% of frames,
+but validation shows it over-fires on isolated frames; genuine sustained merges (runs ≥15
+frames) are **22% of the slice**, concentrated in a few multi-second couple-proximity windows
+(peaks 27030–27360, 28020–29010), not random — one recurring close-couple situation, buffered by
+the tracker's re-association. RT-DETR decision deferred; benefit is bounded and this slice is a
+dense worst case.
+
+## Phase 5 (cont. 3) — detector decision: RT-DETR-R18 replaces YOLOv8n
+
+Time-boxed 3-step investigation into the two-people-one-box merge before the full-video run:
+
+- **Frequency scales with crowd density**, so Slice B's ~17–22% is moderate, not a spike:
+  sparse 85000–91000 (1.1 ROI people/frame) **2%** (≈ the classifier's FP floor) → Slice B
+  couple **~22%** → dense 140000–150000 **26%** → crowded 103000–109000 (3.4 people/frame)
+  **56%**. The merge is a general, density-driven failure that worsens as the kiosk gets busy.
+- **RT-DETR-R18 vs the alternatives on the merge frame (26800), MPS proxy:** YOLOv8n merges the
+  couple into one box (3M params); **RT-DETR-R18 separates them (2 boxes 0.91/0.90), 20.2M
+  params, 48 ms, 121 MB** — ~3× cheaper than rtdetr-l (33M, 142 ms) and NMS-free (no threshold to
+  tune). Only rtdetr-l/x ship in ultralytics; R18 came from `PekingU/rtdetr_r18vd` (transformers,
+  needs a one-line `torch.compiler.is_compiling` shim on torch 2.2.2).
+- **SAM-lite ruled out:** FastSAM-s (11.8M, 65 ms) is class-agnostic — on frame 26800 it returned
+  162 instances and over-segments people into parts + furniture; a naive person-shape filter gave
+  18 "people" for 2. A fair count needs a semantic person layer (CLIP prompting per instance),
+  far beyond a single comparison, so it is not a drop-in and does not pay off at similar cost.
+
+RT-DETR-R18 was wired in behind the Detector Protocol (`src/detect/rtdetr.py`, config-driven via
+`detector.type: rtdetr`), and downstream verified: it emits the same xyxy pixel boxes, produces no
+slivers (min box width 47px), and flows through zone/staff/stitch/ReID unchanged.
+
+**Before/after (YOLOv8n vs RT-DETR-R18), local MPS, three windows — a genuine trade-off, not a
+clean win:**
+
+| window  | detector | count_err | match | coverage | FPS (MPS) |
+| ------- | -------- | --------- | ----- | -------- | --------- |
+| sparse  | YOLO     | +0        | 0/1   | 18.5%    | 56.8      |
+| sparse  | RT-DETR  | −1        | 0/1   | 0.0%\*   | 9.2       |
+| Slice B | YOLO     | +0        | 1/2   | 67.6%    | 40.4      |
+| Slice B | RT-DETR  | +2        | 2/2   | 100%     | 9.5       |
+| crowded | YOLO     | +2        | 2/4   | 95.1%    | 18.9      |
+| crowded | RT-DETR  | +5        | 4/4   | 100%     | 7.0       |
+
+\* a marginal P10 track was swallowed by a spurious 1-frame staff flag (dominant-segment rule can
+flag a 1-frame 100%-staff track; harmless, FP=0). Purity ~1.0 and staff false-positives 0 for both.
+
+- **Win:** RT-DETR recovers every identity on the dense/crowded cases — match 1/2→2/2 and 2/4→4/4,
+  coverage 67→100% and 95→100% — doing exactly what it was chosen for (separating adjacent people).
+- **Cost:** count_error regresses everywhere (+0→+2, +2→+5: better per-frame separation makes more
+  tracks the stitch doesn't fully re-merge), and throughput drops ~4–6× (7–9 FPS MPS vs 18–56) —
+  even a 2–3× T4 speedup is likely below the 30 FPS real-time target.
+
+**Decision pending real T4 throughput** (MPS is only a proxy, and the call rests on it): lock
+RT-DETR-R18 if it clears ~30 FPS on the T4 (the identity-recovery win justifies the count_error
+cost); otherwise revert to YOLOv8n (better count_error, comfortably real-time, at the cost of
+merging crowded pairs). Config currently left on RT-DETR, uncommitted, awaiting that number.

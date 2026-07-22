@@ -15,6 +15,7 @@ yolov8n.pt
 yolov8s.pt
 yolov8m.pt
 rtdetr-l.pt
+FastSAM-s.pt
 # overlay render outputs (large video / per-frame artifact, regenerated on demand)
 *.mp4
 outputs/**/render_frames.yaml
