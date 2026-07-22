@@ -119,7 +119,17 @@ staff:
   red_hsv_low: [155, 90, 50]
   red_hsv_high: [179, 255, 255]
   min_cluster_frac: 0.03 # min share of band pixels in a hue cluster to count it present
-  min_staff_frame_frac: 0.7 # min share of a track's frames matching to flag it staff
+  # Lowered from 0.7 for this pipeline's track structure, on measured separability rather
+  # than to rescue one track. Scoring the heuristic on *solo* frames (exactly one subject,
+  # exactly one in-zone box, so the crop is unambiguously that person) gives customers
+  # 0.000 across the board and staff sightings 0.750-1.000 -- the two populations do not
+  # overlap at all. What broke was dilution, not discrimination: the ROI correction makes
+  # staff tracks longer and more complete, so they now include frames where the chest
+  # stripe is not visible, pulling the pooled fraction to 0.581 for staff-680. 0.5 sits
+  # far above every measured customer and below every measured staff sighting; measured
+  # effect is staff-680 correctly flagged (staff window count_err +2 -> +1) with staff
+  # false positives still 0 on every window, and crowded identical at every value tested.
+  min_staff_frame_frac: 0.5 # min share of a track's frames matching to flag it staff
 
 dwell:
   # A track's ROI presence splits into a new segment when its anchor leaves the ROI

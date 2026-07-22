@@ -1,0 +1,50 @@
+[
+  {
+    "name": "staff07",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "staff": {
+      "min_staff_frame_frac": 0.7
+    }
+  },
+  {
+    "name": "staff06",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "staff": {
+      "min_staff_frame_frac": 0.6
+    }
+  },
+  {
+    "name": "staff05",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "staff": {
+      "min_staff_frame_frac": 0.5
+    }
+  },
+  {
+    "name": "staff04",
+    "params": {
+      "new_track_thresh": 0.85,
+      "proximity_thresh": 0.99,
+      "track_buffer": 300,
+      "appearance_thresh": 0.15
+    },
+    "staff": {
+      "min_staff_frame_frac": 0.4
+    }
+  }
+]

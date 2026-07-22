@@ -1,0 +1,210 @@
+{
+  "cust-P1": {
+    "kind": "customer",
+    "gt_frames": 15253,
+    "solo_candidates": 79,
+    "scored_frames": 68,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P10": {
+    "kind": "customer",
+    "gt_frames": 13033,
+    "solo_candidates": 262,
+    "scored_frames": 100,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P11": {
+    "kind": "customer",
+    "gt_frames": 8772,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "cust-P12": {
+    "kind": "customer",
+    "gt_frames": 9452,
+    "solo_candidates": 23,
+    "scored_frames": 22,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P13": {
+    "kind": "customer",
+    "gt_frames": 11448,
+    "solo_candidates": 5,
+    "scored_frames": 4,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P14": {
+    "kind": "customer",
+    "gt_frames": 12017,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "cust-P15": {
+    "kind": "customer",
+    "gt_frames": 10537,
+    "solo_candidates": 188,
+    "scored_frames": 100,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P16": {
+    "kind": "customer",
+    "gt_frames": 3076,
+    "solo_candidates": 7,
+    "scored_frames": 4,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P17": {
+    "kind": "customer",
+    "gt_frames": 3125,
+    "solo_candidates": 11,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "cust-P18": {
+    "kind": "customer",
+    "gt_frames": 4159,
+    "solo_candidates": 321,
+    "scored_frames": 9,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P2": {
+    "kind": "customer",
+    "gt_frames": 11327,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "cust-P3": {
+    "kind": "customer",
+    "gt_frames": 4333,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "cust-P4": {
+    "kind": "customer",
+    "gt_frames": 20591,
+    "solo_candidates": 15,
+    "scored_frames": 7,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P5": {
+    "kind": "customer",
+    "gt_frames": 10950,
+    "solo_candidates": 43,
+    "scored_frames": 9,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P6": {
+    "kind": "customer",
+    "gt_frames": 18624,
+    "solo_candidates": 21,
+    "scored_frames": 13,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P7": {
+    "kind": "customer",
+    "gt_frames": 7667,
+    "solo_candidates": 8,
+    "scored_frames": 2,
+    "staff_frames": 0,
+    "staff_frac": 0.0
+  },
+  "cust-P8": {
+    "kind": "customer",
+    "gt_frames": 6428,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "cust-P9": {
+    "kind": "customer",
+    "gt_frames": 6313,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "staff-37": {
+    "kind": "staff",
+    "gt_frames": 191,
+    "solo_candidates": 191,
+    "scored_frames": 100,
+    "staff_frames": 97,
+    "staff_frac": 0.97
+  },
+  "staff-401": {
+    "kind": "staff",
+    "gt_frames": 1832,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "staff-471": {
+    "kind": "staff",
+    "gt_frames": 34,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "staff-510": {
+    "kind": "staff",
+    "gt_frames": 165,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "staff-512": {
+    "kind": "staff",
+    "gt_frames": 194,
+    "solo_candidates": 0,
+    "scored_frames": 0,
+    "staff_frames": 0,
+    "staff_frac": null
+  },
+  "staff-680win": {
+    "kind": "staff",
+    "gt_frames": 3540,
+    "solo_candidates": 322,
+    "scored_frames": 100,
+    "staff_frames": 75,
+    "staff_frac": 0.75
+  },
+  "staff-706": {
+    "kind": "staff",
+    "gt_frames": 524,
+    "solo_candidates": 524,
+    "scored_frames": 100,
+    "staff_frames": 100,
+    "staff_frac": 1.0
+  },
+  "staff-754": {
+    "kind": "staff",
+    "gt_frames": 205,
+    "solo_candidates": 205,
+    "scored_frames": 100,
+    "staff_frames": 98,
+    "staff_frac": 0.98
+  }
+}

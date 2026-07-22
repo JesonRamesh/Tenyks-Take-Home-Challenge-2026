@@ -889,3 +889,105 @@ they do not contend, on the crowded 3k sub-window (worst case, matching the Phas
   (0.201 GB ByteTrack, 0.331 GB BoT-SORT+OSNet, both ~2% of the 16 GB budget) suggest headroom,
   but RF-DETR is a larger detector and needs its own T4 measurement. This is a genuine gap against
   the "report peak VRAM for every benchmarked configuration" constraint, not an oversight.
+
+## Phase 6 (cont.) — final round before locking
+
+### ROI zone-depth sweep — keep `box_depth_frac: 0.4`
+
+Swept 0.4 / 0.5 / 0.6 / 0.7 on all three windows for both candidate pipelines, on cached
+detections so only the gate varies. **Sparse and Slice B are completely insensitive** to depth
+in both pipelines (identical count_err, matched, coverage, purity at all four values), so only
+crowded discriminates:
+
+| depth | v2 crowded | baseline+ROI-fix crowded |
+| ----- | ---------- | ------------------------ |
+| **0.4** | **+3, 4/4, cov 100%, pur 0.975** | **+3, 3/4, cov 98.4%, pur 0.991** |
+| 0.5 | +3, **3/4**, cov 100%, pur 0.989 | +2, **2/4**, cov **93.0%**, pur 0.997 |
+| 0.6 | +2, 3/4, cov 100%, pur 0.987 | +3, 2/4, cov 93.0%, pur 0.997 |
+| 0.7 | +2, 3/4, cov 100%, pur 0.986 | +2, 2/4, cov 93.0%, pur 0.997 |
+
+Going above 0.4 **costs a recovered identity in both pipelines** (v2 4/4 → 3/4, baseline
+3/4 → 2/4) and costs the baseline 5.4 points of coverage, while count_error does not improve
+monotonically (v2 +3/+3/+2/+2; baseline +3/+2/+3/+2 — inside the noise). That is the opposite
+of the requested criterion, so **0.4 stays**; the strictest option is not chosen by default,
+and here it is actively worse.
+
+Why the gate has so little room: the in-zone depth distribution is **strongly bimodal**. Of
+detections whose feet fall inside the ROI, the share still inside at increasing depth is
+(RF-DETR) sparse 0.525 → 0.525, Slice B 0.726 → 0.722, crowded 0.971 → 0.883 for 0.4 → 0.7.
+Boxes are almost always either well inside the zone or clipping it at the very edge, and the
+**edge-clippers are already removed at 0.4** (they are the 47% of feet-in detections on sparse
+that fail even the 0.4 test). Only ~9% of crowded detections live in the 0.4–0.7 band.
+
+So the residual leg-clipping visible in the overlay is **not addressable by `box_depth_frac`** —
+the remaining marginal boxes are people genuinely standing at the zone boundary, and excluding
+them costs a real customer's identity. If it needs fixing, the lever is the polygon's shape at
+the kiosk-side edge, not the depth fraction. Logged, not changed.
+
+### Staff filter — separability measured; the earlier "customer P11 scores 0.924" was wrong
+
+**Correction to the previous report.** The claim that GT customer P11 scored 0.924 on the staff
+heuristic (and therefore that the classes were inverted) was an **attribution error, not a
+classifier failure**. Tracks were attributed to GT people by *temporal* overlap, which cannot
+distinguish "is P11" from "is standing next to P11". Every high-scoring track in the crowded
+window coincides with a known staff sighting from `outputs/staff.yaml`:
+
+| raw track | staff_frac | span | overlapping staff sighting |
+| --------- | ---------- | ---- | -------------------------- |
+| 25 | 0.793 | 108603–108999 | 510 (108490–108655), 512 (108548–108742) |
+| 23 | 0.390 | 108503–108999 | 510, 512 |
+| 4  | 0.339 | 103000–105507 | 471 (103808–103842) |
+| 19 | 0.226 | 106335–108821 | 510, 512 |
+
+Those were real staff, correctly scored.
+
+**Separability, measured properly** (`diagnose_staff_separability.py`): the heuristic is scored
+only on **solo frames** — frames where exactly one subject is present *and* the detector returns
+exactly one in-zone box, so the crop is unambiguously that subject. Subjects without enough solo
+frames are reported as such rather than guessed at.
+
+| population | subjects with ≥10 scored frames | staff_frac |
+| ---------- | ------------------------------- | ---------- |
+| GT customers | P1, P6, P10, P12, P15 | **0.000, 0.000, 0.000, 0.000, 0.000** |
+| staff sightings | staff-680, staff-37, staff-754, staff-706 | **0.750, 0.970, 0.980, 1.000** |
+
+**Perfectly separable — any threshold in (0.000, 0.750] splits them cleanly.** The heuristic is
+not the problem.
+
+Scope caveat, stated exactly: the 10 confirmed staff ids from Phase 2 (680, 38, 37, 915, 719,
+618, 665, 711, 828, 829) are *baseline track ids* whose frame ranges were never recorded, and the
+Phase-2 run's `tracks.yaml` has since been overwritten — so only ids with recoverable spans could
+be scored: the 7 sightings in the committed `staff.yaml` plus staff-680's window. Of those, 4 had
+≥10 solo frames (the rest are short sightings that are never solo). Likewise 5 of 18 GT customers
+have enough solo frames; the other 13 are never alone in the ROI, which is the same co-presence
+limit already documented for dwell.
+
+**The real failure was dilution, and one bounded fix resolves it.** The ROI correction makes staff
+tracks longer and more complete, so they now include frames where the chest stripe is not visible;
+staff-680 scores 0.750 on solo frames but **0.581 pooled over its full 3536-frame track**, under
+the 0.7 threshold calibrated on shorter Phase-5 tracks. Sweeping the threshold:
+
+| `min_staff_frame_frac` | staff window | crowded |
+| ---------------------- | ------------ | ------- |
+| 0.7 (previous) | count_err **+2**, staff missed, FP 0 | +3, 4/4, FP 0 |
+| 0.6 | +2, staff missed, FP 0 | +3, 4/4, FP 0 |
+| **0.5 (adopted)** | **+1, staff-680 correctly flagged**, FP 0 | +3, 4/4, FP 0 |
+| 0.4 | +1, FP 0 | +3, 4/4, FP 0 |
+
+**Adopted 0.5**: it sits far above every measured customer (0.000) and below every measured staff
+sighting (0.750+), corrects the staff-window count, and changes nothing on sparse (+0, 1/1),
+Slice B (+1, 2/2) or crowded (+3, 4/4) — staff false positives remain **0 on every window**.
+
+Remaining quantified limitation, not claimed as solved: **staff false negatives = 1 of 1 testable
+sighting before this change, 0 after**; staff false positives = 0 throughout. The separability
+evidence rests on 4 staff sightings and 5 customers with clean solo frames — enough to show the
+populations do not overlap, not enough to certify the threshold against all 18 customers, 13 of
+which are never solo.
+
+### CUDA benchmark procedure (not runnable here)
+
+`docs/colab_perf.md` holds the copy-paste procedure for the real T4 numbers. Peak VRAM is
+unmeasurable on this dev machine (`torch.cuda.max_memory_reserved()` reads 0.0 on MPS), so FPS
+and VRAM must come from CUDA hardware. The doc pins the install order that keeps Colab's CUDA
+torch intact — `boxmot` goes in with `--no-deps` because its `torchvision<0.18` / `numpy==1.26.4`
+pins would otherwise downgrade the GPU stack out from under `rfdetr`.

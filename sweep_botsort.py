@@ -72,6 +72,8 @@ def main() -> None:
             # cached detections and scored by the same harness as everything else.
             if "kiosk_roi" in point:
                 config["kiosk_roi"] = {**base["kiosk_roi"], **point["kiosk_roi"]}
+            if "staff" in point:
+                config["staff"] = {**base["staff"], **point["staff"]}
             # Coverage/purity need the per-frame artifact, so force it on for scoring.
             config["overlay"] = {**base.get("overlay", {}), "emit_render_frames": True}
             config_path = run_dir / "config.yaml"
