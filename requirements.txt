@@ -7,6 +7,10 @@ torchvision
 # Pinned so a fresh install can't silently shift YOLOv8n detection behavior across
 # ultralytics minors (NMS/preprocessing tweaks) between local and the Colab/T4 run.
 ultralytics==8.4.102
+# RT-DETR-R18 detector (PekingU/rtdetr_r18vd), the Step 1 runner-up kept as a swappable
+# option. Pinned to 4.45 because newer transformers require torch>=2.4 while boxmot fixes
+# torch to 2.2.x; the wrapper adds the torch.compiler.is_compiling shim that 2.2 lacks.
+transformers==4.45.2
 opencv-python
 lap
 # Pinned to the last classic-API boxmot: exposes create_tracker/get_tracker_config
@@ -15,3 +19,8 @@ lap
 boxmot==12.0.2
 # boxmot 12.x imports pkg_resources, which setuptools removed in 81+.
 setuptools<81
+
+# NOT installable here: the production detector RF-DETR (`pip install rfdetr`) resolves
+# transformers>=5.1, which conflicts with the 4.45.2 pinned above for the RT-DETR wrapper.
+# It is installed in a separate venv (see requirements-rfdetr.txt) and reaches the pipeline
+# through a detection cache; see decisions.md, Phase 6 Step 0.

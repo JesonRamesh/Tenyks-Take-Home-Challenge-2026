@@ -1,0 +1,17 @@
+# RF-DETR environment, kept separate from requirements.txt on purpose: rfdetr resolves
+# transformers>=5.1 (and a newer torch/numpy with it), which is incompatible with the
+# transformers==4.45.2 the RT-DETR wrapper needs. Rather than loosen that pin and silently
+# change the detector being compared against, the two live in different venvs and meet at
+# the detection cache written by dump_detections.py. See decisions.md, Phase 6 Step 0.
+#
+#   python3.12 -m venv .venv-rfdetr
+#   .venv-rfdetr/bin/python -m pip install -r requirements-rfdetr.txt
+#
+rfdetr==1.8.3
+pyyaml
+# Only needed to run the full pipeline (not just dump detections) inside this venv, e.g.
+# for an end-to-end throughput measurement. Installed with --no-deps so it cannot drag the
+# stack back to its own torch/numpy pins:
+#   .venv-rfdetr/bin/python -m pip install --no-deps boxmot==12.0.2 lap filterpy gdown \
+#       loguru ftfy "setuptools<81"
+#   .venv-rfdetr/bin/python -m pip install scikit-learn pandas beautifulsoup4 wcwidth

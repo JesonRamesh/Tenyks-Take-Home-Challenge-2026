@@ -27,6 +27,18 @@ weights/
 
 # local boxmot sanity-check virtualenv
 .venv-boxmot/
+# RF-DETR virtualenv: rfdetr needs transformers>=5.1, which conflicts with the
+# transformers==4.45.2 the RT-DETR wrapper pins, so it is isolated (see decisions.md)
+.venv-rfdetr/
+
+# cached detector output (dump_detections.py) — large binary, regenerated on demand
+outputs/det_cache/
+# per-point sweep run dirs — the sweep_rows.json summary is the artifact worth keeping
+outputs/sweep_*/*/
+outputs/bakeoff_*/*/
+outputs/baseline_*/*/
+outputs/v2_final/*/
+.DS_Store
 
 
 # python caches
