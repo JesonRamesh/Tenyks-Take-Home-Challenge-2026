@@ -66,3 +66,18 @@ class StaffClassifier:
             xi2, yi2 = min(width, int(x2)), min(height, int(y2))
             flags.append(self._is_staff_frame(frame[yi1:yi2, xi1:xi2]))
         return flags
+
+
+def is_staff_track(constituents: list[tuple[int, int]], min_staff_frame_frac: float) -> bool:
+    """Track-level staff verdict from its merged segments' (staff_frames, total_frames).
+
+    A merged identity is staff if its dominant segment — the constituent raw track with
+    the most frames — shows the uniform in at least min_staff_frame_frac of its frames.
+    Judging the dominant segment rather than the pooled fraction over the whole merged
+    track keeps a real staff member flagged when the stitch merges in segments where the
+    uniform isn't camera-facing: those would otherwise dilute the pooled fraction below
+    the threshold (the staff-680 dilution). For an unmerged track it is identical to the
+    old whole-track fraction.
+    """
+    staff_hits, frames = max(constituents, key=lambda segment: segment[1])
+    return frames > 0 and staff_hits / frames >= min_staff_frame_frac

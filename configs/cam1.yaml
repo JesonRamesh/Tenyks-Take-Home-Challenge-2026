@@ -16,6 +16,11 @@ kiosk_roi:
   # the polygon for the track to count as in-zone. Hardens the old feet-only test
   # against edge-clipping walkers and boundary-grazing phantom boxes.
   box_depth_frac: 0.4
+  # Minimum box width-to-height ratio for a detection to count as a person. The detector
+  # boxes thin vertical slivers of kiosk signage/background as "people" (~4px wide, w/h
+  # ~1:60); a real person, even half-occluded, stays well above 1:10. Drops those phantom
+  # slivers before they form tracks and dilute the stitch/staff filter.
+  min_box_aspect: 0.1
 
 detector:
   model: yolov8n

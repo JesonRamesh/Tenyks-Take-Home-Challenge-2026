@@ -30,7 +30,7 @@ from src.detect.yolo import YoloDetector
 from src.dwell.aggregate import aggregate
 from src.reid.embed import Embedder
 from src.reid.stitch import TrackAppearance, stitch
-from src.staff.filter import StaffClassifier
+from src.staff.filter import StaffClassifier, is_staff_track
 from src.track.boxmot_tracker import BoxmotTracker
 from src.track.bytetrack import ByteTrackTracker
 from src.zones.roi import anchor, in_zone
@@ -67,6 +67,7 @@ def main() -> None:
     config = yaml.safe_load(args.config.read_text())
     polygon = [tuple(point) for point in config["kiosk_roi"]["roi_polygon"]]
     box_depth_frac = config["kiosk_roi"]["box_depth_frac"]
+    min_box_aspect = config["kiosk_roi"]["min_box_aspect"]
     det_cfg = config["detector"]
     device = resolve_device(det_cfg["device"])
 
@@ -150,7 +151,7 @@ def main() -> None:
             break
         detections = detector.detect(frame)
         tracks = tracker.update(detections, frame, frame_index)
-        zone_tracks = [track for track in tracks if in_zone(track, polygon, box_depth_frac)]
+        zone_tracks = [track for track in tracks if in_zone(track, polygon, box_depth_frac, min_box_aspect)]
         if zone_tracks:
             boxes = [(t.x1, t.y1, t.x2, t.y2) for t in zone_tracks]
             staff_flags = staff_clf.staff_frames(frame, boxes)
@@ -205,12 +206,14 @@ def main() -> None:
         id_map = {track_id: track_id for track_id in in_zone_frames}
     merged_frames: dict[int, list[int]] = {}
     merged_anchors: dict[int, list[tuple[float, float]]] = {}
-    merged_staff_hits: dict[int, int] = {}
+    # Per merged id, its constituent raw tracks as (staff_frames, total_frames), so the
+    # staff verdict can judge the dominant segment instead of the diluted pooled fraction.
+    staff_constituents: dict[int, list[tuple[int, int]]] = {}
     for track_id, frames in in_zone_frames.items():
         canonical = id_map[track_id]
         merged_frames.setdefault(canonical, []).extend(frames)
         merged_anchors.setdefault(canonical, []).extend(track_anchors[track_id])
-        merged_staff_hits[canonical] = merged_staff_hits.get(canonical, 0) + staff_hits[track_id]
+        staff_constituents.setdefault(canonical, []).append((staff_hits[track_id], len(frames)))
 
     # Stationarity gate: drop merged tracks that only walked through the ROI, keeping
     # those that dwelt or held still. Sort each track's samples by frame first.
@@ -237,7 +240,7 @@ def main() -> None:
     customer_frames: dict[int, list[int]] = {}
     staff_frames: dict[int, list[int]] = {}
     for canonical, frames in visit_frames.items():
-        target = staff_frames if merged_staff_hits[canonical] / len(frames) >= min_staff_frac else customer_frames
+        target = staff_frames if is_staff_track(staff_constituents[canonical], min_staff_frac) else customer_frames
         target[canonical] = frames
 
     segment_gap = config["dwell"]["segment_gap_frames"]
