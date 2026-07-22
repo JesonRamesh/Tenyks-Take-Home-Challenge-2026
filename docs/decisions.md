@@ -573,3 +573,319 @@ flag a 1-frame 100%-staff track; harmless, FP=0). Purity ~1.0 and staff false-po
 RT-DETR-R18 if it clears ~30 FPS on the T4 (the identity-recovery win justifies the count_error
 cost); otherwise revert to YOLOv8n (better count_error, comfortably real-time, at the cost of
 merging crowded pairs). Config currently left on RT-DETR, uncommitted, awaiting that number.
+
+## Phase 6 — detector+tracker v2 (branch `detector-tracker-v2`)
+
+Goal: a properly-tuned pipeline on a stronger detector+tracker pair, judged against
+main's proven baseline (YOLOv8n + ByteTrack + custom crowding-invariant stitch + OSNet
+long-gap merge). Three validation windows throughout, so results stay comparable to the
+Phase 5 findings and no conclusion rests on one window:
+sparse 85000–91000 (1 person) · Slice B 26700–30000 (2, close pair) · crowded
+103000–109000 (4+).
+
+**Starting state note:** the RT-DETR-vs-YOLO decision at the end of Phase 5 was left
+"pending real T4 throughput". That number has *not* landed in this log, so Phase 6
+treats throughput as unresolved and reports MPS figures as an explicit proxy, flagging
+every place the conclusion depends on it.
+
+### Step 0 — infrastructure: detection cache (the enabler)
+
+Detection dominates cost (RT-DETR ~8 FPS on MPS) and both the detector bake-off and the
+tracker sweep re-run the same frames many times. `dump_detections.py` writes one
+detector's raw output for a window to an `.npz`; `src/detect/cached.py` replays it behind
+the same Detector Protocol (`detector.type: cached`). This is the Phase 5 `stitch_state.pkl`
+idea moved one stage earlier — replay a fixed upstream so only the stage under test varies.
+
+- Verified **bit-exact**: cached replay reproduced live YOLOv8n detections over 30 frames,
+  161 detections, 0 mismatches.
+- Makes a sweep point cost tracking only (~2.2 min on Slice B instead of ~11 min), and it
+  is what makes RF-DETR testable at all — see the dependency conflict below.
+- `src/detect/build.py` centralises detector construction with **deferred imports per
+  branch**, because the backends' dependency pins are mutually exclusive.
+- `resolve_device` moved from `run.py` to `src/device.py`: the detector-only scripts must
+  not have to import the tracker stack (boxmot is absent from the RF-DETR environment).
+- **FPS caveat:** a cached run's FPS measures tracking only. Every throughput number in
+  the Step 5 table comes from a **live-detector** run, never a cache replay.
+
+### Step 0 — RF-DETR dependency conflict (isolated, not worked around)
+
+`pip install rfdetr` resolves `transformers>=5.1.0`, but the RT-DETR wrapper is pinned to
+`transformers==4.45.2` (newer transformers needs torch>=2.4; boxmot pins torch 2.2.x).
+Installing RF-DETR into the working venv would have silently broken the RT-DETR path —
+the detector it is being compared against.
+
+Resolved by isolation, not by loosening a pin: RF-DETR lives in its own `.venv-rfdetr`
+(torch 2.13, transformers 5.14, numpy 2.5) and meets the pipeline at the detection cache.
+`src/detect/rfdetr.py` implements the same Protocol. Note RF-DETR's checkpoints keep
+COCO's original 91-class ids (person = 1, not 0), so the wrapper translates from the
+config's YOLO-space class ids rather than making the config carry a per-detector id.
+
+### Step 1 — detector separation on the couple-merge frame (26800)
+
+Region under test x∈[740,915], y∈[300,615] — the close couple YOLOv8n merges. All at the
+config's feed threshold (conf 0.1), MPS:
+
+| detector | total boxes | boxes on the couple | couple confidences | params |
+| -------- | ----------- | ------------------- | ------------------ | ------ |
+| YOLOv8n  | 7           | **1 (merged)**      | 0.70               | 3.2M   |
+| RT-DETR-R18 | 44       | **5**               | 0.91, 0.90, + 0.22/0.14/0.13 | 20.2M |
+| RF-DETR-nano | 23      | **2 (clean)**       | 0.91, 0.89         | — |
+
+- Both NMS-free detectors separate the couple; YOLOv8n does not, reconfirming Phase 5.
+- **RF-DETR's output is markedly cleaner**: exactly the two real people in the region,
+  and 23 boxes on the frame against RT-DETR's 44. RT-DETR adds three sub-0.25 boxes on
+  the couple (partial-body/duplicate queries). Spurious low-confidence boxes are not free
+  — they are what the tracker spawns junk tracks from, and they are the mechanism behind
+  the count_error regression RT-DETR showed in Phase 5.
+- RF-DETR logs that it is *not* inference-optimized and offers `optimize_for_inference(fp16)`
+  for "~8x on T4 via FP16 Tensor Cores" — directly relevant to the throughput question
+  that blocked RT-DETR. Untested here; flagged, not claimed.
+
+Single-frame evidence only decides separation, not counting. Window-level results follow.
+
+### Step 1 — ROI bottom-edge bug (found via RF-DETR, affects the baseline too)
+
+Scoring RF-DETR on the sparse window returned **count_error −1 with 0% coverage**: not one
+customer track, though GT P10 spans the whole window. Not a detector recall failure —
+RF-DETR produced 400 in-zone detections there, but **zero above conf 0.6**, so BoT-SORT
+(whose `track_high_thresh` defaults to 0.6) could never spawn a track: only high-confidence
+detections create tracks, the low band can merely extend existing ones.
+
+Tracing why those detections were both rare and low-confidence exposed the real cause, a
+**box-geometry/ROI interaction, not a confidence one**:
+
+| frame | YOLOv8n box bottom | RF-DETR box bottom | in-zone? |
+| ----- | ------------------ | ------------------ | -------- |
+| 85186 | y2 = 715           | y2 = 720           | YOLO yes / RF-DETR no |
+| 88273 | y2 = 715           | y2 = 720           | YOLO yes / RF-DETR no |
+
+`roi_polygon`'s bottom edge was authored at **y = 716** on a **720**-row frame. A person at
+the near edge is cut off by the frame, so their box bottom clamps to the image boundary —
+below the polygon — and the anchor test rejects them. It only ever worked because YOLOv8n
+under-extends edge-cut boxes by a few pixels. That is a detector quirk standing in for scene
+geometry, exactly the kind of hidden coupling this project's config-driven rule exists to avoid.
+
+**This is a latent bug on main, not something RF-DETR introduced.** In-zone detections at
+conf ≥ 0.6, polygon bottom 716 → 721:
+
+| detector | window  | bottom 716 | bottom 721 |
+| -------- | ------- | ---------- | ---------- |
+| YOLOv8n  | sparse  | 1248       | **6000**   |
+| RF-DETR  | sparse  | 0          | **6002**   |
+| YOLOv8n  | crowded | 6924       | **10903+** |
+| RF-DETR  | crowded | 14292      | **19653+** |
+
+It plausibly explains the Phase 5 observation that P4/P5 sat at 54–61% coverage and the
+sparse window at 18.5% — a "recall gap" that is substantially a zone-gate artifact.
+
+**Fix: bottom edge → y = 721**, chosen on evidence, not taste. At 720 the edge is exactly
+coincident with the clamped box bottom and ray-casting is boundary-ambiguous (RF-DETR sparse
+recovers only 3372 of 6002); at 721 and 725 the count is identical and stable. The floor
+genuinely continues past the visible frame, so the ROI should too.
+
+Applied to `configs/cam1_v2.yaml`. `configs/cam1.yaml` is left **byte-identical to main**, and
+`configs/cam1_roifix.yaml` (baseline + this fix only) is added so the Step 5 table can separate
+the ROI gain from the detector/tracker gain instead of confounding them.
+
+### Step 1 — detector decision: RF-DETR-nano over RT-DETR-R18
+
+Window-level comparison with the tracker held constant at boxmot's BoT-SORT defaults and
+the corrected ROI, so only the detector varies. Local MPS; detections replayed from cache,
+so all three saw byte-identical frames.
+
+| window  | detector     | count_err | matched | coverage | purity | staff FP |
+| ------- | ------------ | --------- | ------- | -------- | ------ | -------- |
+| sparse  | YOLOv8n      | +0        | 1/1     | 100%     | 1.000  | 0        |
+| sparse  | **RF-DETR**  | **+0**    | **1/1** | **100%** | 1.000  | 0        |
+| sparse  | RT-DETR-R18  | +1        | 1/1     | 100%     | 1.000  | 0        |
+| Slice B | YOLOv8n      | +5        | 0/2     | 42.7%    | 1.000  | 0        |
+| Slice B | **RF-DETR**  | **+2**    | **2/2** | **100%** | 1.000  | 0        |
+| Slice B | RT-DETR-R18  | +4        | 2/2     | 100%     | 1.000  | 0        |
+| crowded | YOLOv8n      | +27       | 1/4     | 96.8%    | 1.000  | 0        |
+| crowded | **RF-DETR**  | **+18**   | **4/4** | **100%** | 0.998  | 0        |
+| crowded | RT-DETR-R18  | +25       | 3/4     | 100%     | 0.998  | 0        |
+
+**RF-DETR-nano wins on every window** — never worse on count_error, and strictly better on
+identity recovery in the crowd (4/4 vs RT-DETR's 3/4 and YOLO's 1/4). Supporting evidence:
+
+- **Output cleanliness, the likely mechanism.** Detections per frame at the conf-0.1 feed
+  threshold: YOLOv8n 8.4, RF-DETR 17.9, **RT-DETR 37.4** (46/frame on sparse). RT-DETR's
+  extra boxes are sub-0.25 partial-body/duplicate queries — the same clutter visible on the
+  merge frame (5 boxes on the couple vs RF-DETR's 2). Spurious low-confidence boxes are what
+  a tracker spawns junk tracks from, which is a concrete mechanism for the count_error
+  regression Phase 5 saw with RT-DETR and could not explain.
+- **Throughput.** Detector-only MPS: RF-DETR **14.0–14.9 FPS** vs RT-DETR **5.4–10.8**, i.e.
+  ~2× faster before any optimization, and RF-DETR additionally offers an untested
+  `optimize_for_inference(fp16)` path. This does not settle the T4 question, but RF-DETR is
+  the cheaper of the two NMS-free options on every measurement taken here.
+- Both NMS-free detectors fix the couple merge; YOLOv8n does not. Both reach 100% coverage
+  on all three windows once the ROI is corrected.
+
+Adopted: **RF-DETR-nano**. RT-DETR-R18's Phase 5 "identity recovery at the cost of
+count_error" trade-off is not intrinsic to going NMS-free — RF-DETR gets the identity win
+*and* a lower count_error, at half the boxes and twice the speed.
+
+### Step 2 — tracker: BoT-SORT, custom stitch removed
+
+BoT-SORT (boxmot) per the Phase 5 bake-off, with `reid.post_hoc_stitch: false`. The custom
+gap/anchor/similarity stitch is **not** carried over: its values were fit to ByteTrack's
+fragmentation pattern, and BoT-SORT already associates on OSNet appearance inside the
+data-association step, so running both would double-apply appearance matching.
+
+Confirmed it is not needed: on all three windows the purity floor is 0.998+ and the Phase 5
+crowding-collapse failure (one canonical id drawn on several people) does not recur — that
+bug was a property of the union-find post-hoc merge, which is now gone entirely rather than
+guarded by an invariant.
+
+### Step 3 — what the oracle says the tuning target is
+
+Before sweeping, the Phase 5 oracle/coverage diagnostic on RF-DETR + default BoT-SORT:
+
+| window  | real | count_err | matched | coverage | purity | fragments | **oracle any-overlap** |
+| ------- | ---- | --------- | ------- | -------- | ------ | --------- | ---------------------- |
+| crowded | 22 tracks | +18  | 4/4     | 100%     | 0.998  | 62 over 4 people | **+0**, 4 tracks |
+| Slice B | 4 tracks  | +2   | 2/2     | 100%     | 1.000  | 8 over 2 people  | **+0**, 2 tracks |
+
+Coverage is already 100% and purity ~1.0, and a perfect merge of the fragments that *already
+exist* reaches count_error +0. So the entire residual error is **fragmentation — identities
+dropped and re-spawned — not detection recall and not false tracks.** That makes BoT-SORT's
+own association parameters (how long a lost track survives, and what can re-claim it) the
+correct and sufficient lever, which is exactly what Step 3 tunes.
+
+### Step 3 — tuning BoT-SORT for RF-DETR's output (5 staged sweeps)
+
+Methodology as in Phase 5: detections replayed from cache so only association varies, every
+point scored by the harness, and **every candidate checked on more than one window** — single-
+window tuning already misled this project once. 47 sweep points via `sweep_botsort.py`.
+Slice B is nearly insensitive (+1..+2 throughout); crowded is the discriminating window.
+
+**Stage 1 (one axis at a time, from boxmot defaults; crowded count_err):**
+
+| axis | result |
+| ---- | ------ |
+| default | +18, 4/4 |
+| `track_buffer` 300 / 1500 / 3000 | +15 but **3/4** — and identical at all three, i.e. saturated |
+| `proximity_thresh` 0.7 / 0.9 / 0.99 | +17 / +16 / **+15, still 4/4** |
+| `appearance_thresh` 0.15 / 0.35 | **+18 — completely inert** |
+| `cmc_method: sof` | +18 (no accuracy change; ECC is wasted work on a fixed camera) |
+| `track_high_thresh` 0.4 | +15, 4/4 |
+| `new_track_thresh` 0.5 / 0.8 | +19 / **+14** |
+
+The inert `appearance_thresh` is the key mechanical finding, and it was predicted from the
+source before running: in `BotSort._first_association`, `emb_dists[ious_dists_mask] = 1.0` —
+**the appearance distance is masked wherever IoU distance exceeds `proximity_thresh`**. At the
+0.5 default, a track that has drifted can never be re-claimed by appearance no matter what the
+appearance threshold is, and lost tracks expire with `track_buffer` regardless. That is also
+why `track_buffer` saturates. So the built-in ReID only becomes load-bearing once
+`proximity_thresh` is opened, and only then does `appearance_thresh` do anything.
+
+**Stages 2–3 (combinations).** `new_track_thresh` — the bar to *spawn* an identity — is the
+dominant lever, since RF-DETR's low-confidence queries are what junk tracks are born from.
+Best: `new 0.9 + prox 0.99 + buffer 300 + appearance 0.15` → crowded **+7, 4/4, purity 1.000**;
+Slice B +1, 2/2. With proximity open, tightening appearance to 0.15 now *raises* purity to
+1.000 while holding the count — exactly the predicted interaction.
+
+**Stage 4 (robustness, all three windows).** `new_track_thresh` 0.95 produces **zero tracks**:
+RF-DETR's confidence ceiling is **0.934–0.943**, so the threshold sits above anything the model
+can emit. Measured share of in-zone detections above each value (crowded): 0.85 → 26%,
+0.90 → 7.3%, 0.92 → 1.1%, 0.95 → 0%. The count curve is flat and the cliff is sharp:
+
+| `new_track_thresh` | 0.70 | 0.75 | 0.80 | 0.85 | 0.88 | 0.90 | 0.95 |
+| ------------------ | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| crowded count_err  | +11  | +10  | +10  | **+8** | +8 | +9 | **−4 (no tracks)** |
+| sparse / Slice B   | +0/+2 | +0/+2 | +0/+2 | +0/+2 | +0/+2 | +0/+1 | none |
+
+**Chose 0.85, not the marginally better 0.90.** 0.90 leaves ~0.04 of headroom below the model's
+ceiling; 0.85 leaves ~0.09 and sits in a flat region. We are tested on a different video, so
+paying ~1 count for that margin is the right trade — a threshold whose neighbour produces
+*nothing* is not one to sit next to.
+
+**Stage 5 — is the custom stitch still needed? Measured, not assumed.** Yes, and for a
+structural reason rather than a threshold one: BoT-SORT can only re-claim a lost track through
+its first association, which is proximity-masked and expires with `track_buffer`, so it handles
+occlusion but cannot re-identify someone returning minutes later.
+
+| config (crowded) | count_err | matched | purity |
+| ---------------- | --------- | ------- | ------ |
+| tuned BoT-SORT, no stitch | +9 | 4/4 | 0.993 |
+| + stitch gap 900, sim 0.6 | +5 | 4/4 | 0.990 |
+| + stitch gap 3000, sim 0.6 | **+3** | **4/4** | 0.975 |
+| + stitch gap 9000, sim 0.6 | +3 | 4/4 | 0.978 |
+| + stitch gap 3000, sim 0.5 | +3 | 3/4 (over-merges) | 0.975 |
+| + stitch gap 3000, sim 0.7 | +4 | 3/4 | 0.984 |
+
+Values were **re-derived for this combination**, not inherited. They land near the ByteTrack-era
+gap 3000 / anchor 400 / sim 0.6, which is a real result — the stitch's good operating point is
+similar across both trackers — but it is now supported by a sweep for *this* pipeline, and 9000
+was rejected as buying nothing for a wider merge risk.
+
+**Final v2:** RF-DETR-nano + BoT-SORT (`new_track_thresh` 0.85, `proximity_thresh` 0.99,
+`track_buffer` 300, `appearance_thresh` 0.15) + post-hoc stitch (gap 3000 / anchor 400 / sim 0.6).
+
+### Step 4 — staff filter: a real regression, and it is NOT v2's
+
+The confirmed-staff-680 window (113000–119000) under v2: the staff member **is tracked**
+(track 6, frames 115460–118999) but scores a staff-frame fraction of **0.581 < 0.7**, so it is
+classified as a customer — **0 staff flagged**, a false negative costing +1 on the count there.
+
+Attribution, isolated by re-running each change separately:
+
+- **Not the detector's box geometry.** Matching the staff person's box per frame between YOLOv8n
+  and RF-DETR: height ratio **1.012**, y1 delta −2.0 px, y2 delta +1.1 px, chest band within
+  1.5 px. The two are effectively the same box. (An earlier averaged comparison suggested a 53 px
+  offset; that was confounded by the detectors having different in-zone box counts.)
+- **It is the ROI correction**, and it hits main's pipeline identically: YOLOv8n + ByteTrack +
+  stitch flags staff-680 with the original ROI (raw track 904, fraction **0.715** — reproducing
+  the 72.1% recorded in Phase 5) and flags **0 staff** with the corrected ROI. Better coverage
+  means longer, more complete staff tracks that include frames where the chest stripe is not
+  visible, diluting a fraction whose 0.7 threshold was calibrated on shorter, higher-quality tracks.
+- **The heuristic's discrimination is weak independently of any of this.** On main's baseline with
+  the original ROI, GT *customer* **P11 scores 0.924** on the staff test (100% GT overlap, crowded
+  window) — above the threshold. Staff-680 scores 0.715. **The classes are inverted.** The ROI fix
+  actually lowers P11 to 0.401.
+
+So lowering `min_staff_frame_frac` to catch staff-680 at 0.581 would flag P11 and create a real
+false positive on a customer. **Left at 0.7 deliberately**: v2 reports **0 staff false positives on
+every window**, accepting the staff false negative. Recalibrating the staff filter for the
+corrected ROI (and fixing the P11 confusion, which exists on main today) is separable work and is
+logged as a known limitation rather than papered over with a threshold that trades a false
+negative for a false positive.
+
+### Step 5 — full comparison (three windows, local MPS, cached detections for accuracy)
+
+| config | window | count_err | matched | coverage | purity | staffFP | dwell MAE |
+| ------ | ------ | --------- | ------- | -------- | ------ | ------- | --------- |
+| baseline (main, as-is) | sparse  | **+0** | 0/1 | 18.5% | 1.000 | 0 | 0.00s |
+| baseline (main, as-is) | Slice B | **+0** | 1/2 | 67.6% | 1.000 | 0 | 35.67s |
+| baseline (main, as-is) | crowded | **+2** | 2/4 | 95.1% | 0.979 | 0 | 60.39s |
+| baseline + ROI fix | sparse  | +0 | 1/1 | 100% | 1.000 | 0 | 0.03s |
+| baseline + ROI fix | Slice B | +0 | 1/2 | 67.9% | 1.000 | 0 | 34.54s |
+| baseline + ROI fix | crowded | +3 | 3/4 | 98.4% | 0.991 | 0 | 12.01s |
+| **v2 (RF-DETR + BoT-SORT)** | sparse  | +0 | **1/1** | **100%** | 1.000 | 0 | 0.03s |
+| **v2 (RF-DETR + BoT-SORT)** | Slice B | +1 | **2/2** | **99.8%** | 1.000 | 0 | **0.28s** |
+| **v2 (RF-DETR + BoT-SORT)** | crowded | +3 | **4/4** | **100%** | 0.975 | 0 | **10.01s** |
+
+Throughput and VRAM, measured on **live-detector** runs (never a cache replay), sequentially so
+they do not contend, on the crowded 3k sub-window (worst case, matching the Phase 5 method):
+
+| config | FPS (MPS) | peak VRAM reserved |
+| ------ | --------- | ------------------ |
+| baseline (main) | **31.1** | not measurable on MPS |
+| v2 | **12.1** | not measurable on MPS |
+
+**Honest read — v2 does not win outright on count, and wins decisively on everything about identity:**
+
+- **Count_error: v2 ties or slightly trails.** +0/+1/+3 against main's +0/+0/+2. On crowded v2
+  matches baseline+ROI-fix (+3); the target of *beating* main's count was not met.
+- **Identity recovery: v2 wins decisively** — matched 1/1, 2/2, 4/4 vs main's 0/1, 1/2, 2/4, and
+  coverage 100 / 99.8 / 100% vs 18.5 / 67.6 / 95.1%.
+- **Dwell, a primary deliverable, improves by orders of magnitude**: Slice B **35.67s → 0.28s**,
+  crowded **60.39s → 10.01s**. Main's low count_error is partly bookkeeping — it reaches roughly
+  the right *number* of tracks while covering far less of each person, so its per-person dwell is
+  badly wrong. v2 counts about as well and actually measures the right people.
+- **Cost: throughput.** 12.1 vs 31.1 FPS on MPS, i.e. below the ~30 FPS source rate locally.
+- **VRAM is unresolved**: `torch.cuda` counters read 0.0 on MPS, so peak reserved VRAM **cannot be
+  measured on this machine** and is not reported for either config. Phase 5's T4 figures
+  (0.201 GB ByteTrack, 0.331 GB BoT-SORT+OSNet, both ~2% of the 16 GB budget) suggest headroom,
+  but RF-DETR is a larger detector and needs its own T4 measurement. This is a genuine gap against
+  the "report peak VRAM for every benchmarked configuration" constraint, not an oversight.
