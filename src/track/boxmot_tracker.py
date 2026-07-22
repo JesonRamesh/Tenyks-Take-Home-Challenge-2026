@@ -9,9 +9,12 @@ reid.post_hoc_stitch) — otherwise appearance matching would be double-applied.
 
 The tracker type and ReID backbone are config-driven, never hardcoded. boxmot
 consumes the raw frame for appearance crops and camera-motion compensation, so
-update takes it alongside the detections. Tracker hyperparameters are boxmot's
-own defaults (from its bundled per-tracker yaml) so the bake-off compares each
-tracker out of the box, not a version tuned to this camera.
+update takes it alongside the detections.
+
+Hyperparameters default to boxmot's own bundled per-tracker yaml — the out-of-the-box
+setting the Phase 5 bake-off compared trackers under — and a config's `params` block
+overrides individual keys on top. Overriding is opt-in per key so a config states only
+what it deliberately deviates from, and an untuned tracker still runs at boxmot defaults.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import yaml
 from boxmot import create_tracker, get_tracker_config
 
 from src.detect.base import Detection
@@ -26,7 +30,14 @@ from src.track.base import Track
 
 
 class BoxmotTracker:
-    def __init__(self, tracker_type: str, device: str, half: bool, reid_weights: str | None):
+    def __init__(
+        self,
+        tracker_type: str,
+        device: str,
+        half: bool,
+        reid_weights: str | None,
+        params: dict | None = None,
+    ):
         # boxmot's select_device wants a device *index* ("0"), not torch's "cuda"
         # string, which it parses as a 4-GPU request and rejects. Translate our
         # resolved device name to boxmot's convention; "cpu"/"mps"/"cuda:N" pass through.
@@ -41,13 +52,22 @@ class BoxmotTracker:
         # and gdown lists it before writing, so make it here (like yolov8n.pt's dir).
         if weights is not None:
             weights.parent.mkdir(parents=True, exist_ok=True)
+        # create_tracker reads its yaml only when no param dict is passed, and an
+        # explicit dict replaces the file wholesale — so load boxmot's defaults here and
+        # layer the config's overrides on them, keeping unset keys at boxmot's values.
+        defaults = yaml.safe_load(Path(get_tracker_config(tracker_type)).read_text())
+        tracker_params = {key: spec["default"] for key, spec in defaults.items()}
+        unknown = set(params or {}) - set(tracker_params)
+        if unknown:
+            raise ValueError(f"unknown {tracker_type} params: {sorted(unknown)}")
+        tracker_params.update(params or {})
         self._tracker = create_tracker(
             tracker_type,
-            get_tracker_config(tracker_type),
             reid_weights=weights,
             device=device,
             half=half,
             per_class=False,
+            evolve_param_dict=tracker_params,
         )
 
     def update(self, detections: list[Detection], frame: np.ndarray, frame_index: int) -> list[Track]:

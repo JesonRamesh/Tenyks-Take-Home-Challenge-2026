@@ -26,29 +26,18 @@ import numpy as np
 import torch
 import yaml
 
-from src.detect.yolo import YoloDetector
+from src.detect.build import build_detector
+from src.device import resolve_device
 from src.dwell.aggregate import aggregate
 from src.reid.embed import Embedder
 from src.reid.stitch import TrackAppearance, stitch
 from src.staff.filter import StaffClassifier, is_staff_track
-from src.track.boxmot_tracker import BoxmotTracker
-from src.track.bytetrack import ByteTrackTracker
 from src.zones.roi import anchor, in_zone
 from src.zones.stationarity import is_visit
 
 
 def _unit(vector: np.ndarray) -> np.ndarray:
     return vector / np.linalg.norm(vector)
-
-
-def resolve_device(name: str) -> str:
-    if name != "auto":
-        return name
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def main() -> None:
@@ -76,9 +65,10 @@ def main() -> None:
     else:
         start_frame, end_frame = args.slice or config["eval_slice"]
 
-    detector = YoloDetector(
-        det_cfg["model"], det_cfg["confidence"], det_cfg["classes"], det_cfg["imgsz"], device
-    )
+    # Detector is config-driven (detector.type): yolo, the NMS-free rtdetr/rfdetr, or
+    # cached (replaying a dump_detections.py .npz). All emit the same xyxy pixel
+    # Detection, so nothing downstream changes.
+    detector = build_detector(det_cfg, device)
     staff_clf = StaffClassifier(config["staff"])
 
     # Tracker is config-driven. ByteTrack is motion-only and relies on the post-hoc
@@ -92,7 +82,11 @@ def main() -> None:
     # the full-video pass aren't burdened with a large per-frame file.
     overlay_cfg = config.get("overlay")
     emit_render_frames = bool(overlay_cfg) and overlay_cfg.get("emit_render_frames", False)
+    # Imported per branch, like the detector: ultralytics (ByteTrack) and boxmot need
+    # incompatible pins against some detector backends, so only the selected one is loaded.
     if tracker_cfg["type"] == "bytetrack":
+        from src.track.bytetrack import ByteTrackTracker
+
         tracker = ByteTrackTracker(
             **{
                 key: tracker_cfg[key]
@@ -107,8 +101,14 @@ def main() -> None:
             }
         )
     else:
+        from src.track.boxmot_tracker import BoxmotTracker
+
         tracker = BoxmotTracker(
-            tracker_cfg["type"], device, tracker_cfg["half"], tracker_cfg.get("reid_weights")
+            tracker_cfg["type"],
+            device,
+            tracker_cfg["half"],
+            tracker_cfg.get("reid_weights"),
+            tracker_cfg.get("params"),
         )
     # The post-hoc embedder is only needed for the stitch path; a boxmot tracker
     # carries its own ReID, so skip loading a second appearance model for it.
