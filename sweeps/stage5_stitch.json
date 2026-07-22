@@ -1,0 +1,16 @@
+[
+  {"name": "b85_nostitch",      "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": false}},
+  {"name": "b85_stitch_g900_s6",  "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": true, "gap_frames": 900, "max_anchor_dist": 400, "min_similarity": 0.6}},
+  {"name": "b85_stitch_g3000_s6", "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": true, "gap_frames": 3000, "max_anchor_dist": 400, "min_similarity": 0.6}},
+  {"name": "b85_stitch_g9000_s6", "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": true, "gap_frames": 9000, "max_anchor_dist": 400, "min_similarity": 0.6}},
+  {"name": "b85_stitch_g3000_s5", "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": true, "gap_frames": 3000, "max_anchor_dist": 400, "min_similarity": 0.5}},
+  {"name": "b85_stitch_g3000_s7", "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": true, "gap_frames": 3000, "max_anchor_dist": 400, "min_similarity": 0.7}},
+  {"name": "b85_stitch_g9000_s7", "params": {"new_track_thresh": 0.85, "proximity_thresh": 0.99, "track_buffer": 300, "appearance_thresh": 0.15},
+   "reid": {"post_hoc_stitch": true, "gap_frames": 9000, "max_anchor_dist": 600, "min_similarity": 0.7}}
+]

@@ -1,0 +1,1 @@
+[{"name":"final","params":{"new_track_thresh":0.85,"proximity_thresh":0.99,"track_buffer":300,"appearance_thresh":0.15}}]

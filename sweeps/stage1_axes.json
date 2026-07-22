@@ -1,0 +1,15 @@
+[
+  {"name": "default",        "params": {}},
+  {"name": "buf300",         "params": {"track_buffer": 300}},
+  {"name": "buf1500",        "params": {"track_buffer": 1500}},
+  {"name": "buf3000",        "params": {"track_buffer": 3000}},
+  {"name": "prox0.7",        "params": {"proximity_thresh": 0.7}},
+  {"name": "prox0.9",        "params": {"proximity_thresh": 0.9}},
+  {"name": "prox0.99",       "params": {"proximity_thresh": 0.99}},
+  {"name": "app0.15",        "params": {"appearance_thresh": 0.15}},
+  {"name": "app0.35",        "params": {"appearance_thresh": 0.35}},
+  {"name": "cmc_sof",        "params": {"cmc_method": "sof"}},
+  {"name": "high0.4",        "params": {"track_high_thresh": 0.4}},
+  {"name": "new0.5",         "params": {"new_track_thresh": 0.5}},
+  {"name": "new0.8",         "params": {"new_track_thresh": 0.8}}
+]

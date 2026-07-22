@@ -1,0 +1,7 @@
+[
+  {"name": "nt0.70_h4_p99_b300", "params": {"new_track_thresh": 0.70, "track_high_thresh": 0.4, "proximity_thresh": 0.99, "track_buffer": 300}},
+  {"name": "nt0.75_h4_p99_b300", "params": {"new_track_thresh": 0.75, "track_high_thresh": 0.4, "proximity_thresh": 0.99, "track_buffer": 300}},
+  {"name": "nt0.80_h4_p99_b300", "params": {"new_track_thresh": 0.80, "track_high_thresh": 0.4, "proximity_thresh": 0.99, "track_buffer": 300}},
+  {"name": "nt0.85_h4_p99_b300", "params": {"new_track_thresh": 0.85, "track_high_thresh": 0.4, "proximity_thresh": 0.99, "track_buffer": 300}},
+  {"name": "nt0.88_h4_p99_b300", "params": {"new_track_thresh": 0.88, "track_high_thresh": 0.4, "proximity_thresh": 0.99, "track_buffer": 300}}
+]
