@@ -1,0 +1,121 @@
+# Per-camera config for kiosk "cam1" — main's baseline pipeline with ONLY the ROI
+# bottom-edge correction applied (see decisions.md, Phase 6 Step 1). Exists so the
+# v2 comparison can separate what the ROI fix buys from what the detector+tracker
+# change buys; configs/cam1.yaml stays byte-identical to main.
+# Per-camera config for kiosk "cam1". Nothing here is tuned to any single clip;
+# the ROI describes the fixed camera's kiosk zone, shared by dev and test video.
+camera_id: cam1
+
+# Image-space polygon (pixels, 1280x720) enclosing the kiosk interaction zone:
+# the floor where people stand to use or queue for the self-order kiosks. A track
+# counts as "in the zone" only while its bottom-center anchor is inside.
+kiosk_roi:
+  roi_polygon:
+    - [408, 681]
+    - [704, 332]
+    - [1017, 388]
+    - [1007, 721]
+    - [413, 721]
+  # The bottom edge sits just past the frame's last row (720) on purpose. A person at
+  # the near edge is cut off by the frame, so their box bottom clamps to the image
+  # boundary; a polygon edge drawn at 716 (or exactly at 720, where ray-casting is
+  # boundary-ambiguous) silently drops them. The floor continues past the visible frame,
+  # so the ROI must too — otherwise the gate depends on how far a given detector extends
+  # an edge-cut box, which is a detector quirk, not scene geometry. See decisions.md.
+  # Fraction of a box's height, measured up from the feet, that must fall inside
+  # the polygon for the track to count as in-zone. Hardens the old feet-only test
+  # against edge-clipping walkers and boundary-grazing phantom boxes.
+  box_depth_frac: 0.4
+  # Minimum box width-to-height ratio for a detection to count as a person. The detector
+  # boxes thin vertical slivers of kiosk signage/background as "people" (~4px wide, w/h
+  # ~1:60); a real person, even half-occluded, stays well above 1:10. Drops those phantom
+  # slivers before they form tracks and dilute the stitch/staff filter.
+  min_box_aspect: 0.1
+
+detector:
+  model: yolov8n
+  # Low feed threshold on purpose: ByteTrack's two-stage association relies on the
+  # low-confidence boxes, and does the real high/low gating via track_high_thresh.
+  confidence: 0.1
+  classes: [0] # COCO "person"
+  imgsz: 640
+  device: auto # cuda if available, else mps, else cpu
+
+tracker:
+  type: bytetrack
+  track_high_thresh: 0.5 # detections above this drive confident association
+  track_low_thresh: 0.1 # second-stage association floor
+  new_track_thresh: 0.6 # min score to spawn a brand-new track
+  match_thresh: 0.8 # IoU gate for association
+  track_buffer: 30 # frames a lost track survives before deletion
+  fuse_score: true
+
+reid:
+  # Post-hoc appearance re-association: merges tracks ByteTrack fragmented across a
+  # short occlusion back into one identity. A merge needs all three gates below, so
+  # the weaker ImageNet appearance signal can't over-merge adjacent people. Scoped
+  # to within-visit breaks; multi-visit returns exceed gap_frames and stay separate.
+  # Bypassed (post_hoc_stitch: false) for a boxmot tracker, which associates on ReID
+  # internally, so appearance matching isn't applied twice. See configs/cam1_*.yaml.
+  post_hoc_stitch: true
+  # OSNet (a real person-ReID model) replaces the mobilenet ImageNet backbone: the
+  # diagnostic showed ImageNet features can't separate same- from different-person, the
+  # dominant merge blocker. A .pt name selects the boxmot ReID backbone; a bare name
+  # (e.g. mobilenet_v3_small) still selects the torchvision backbone.
+  model: weights/osnet_x0_25_msmt17.pt
+  # Widened to re-link multi-minute re-entries now that OSNet gives a trustworthy
+  # appearance signal: on the dense slice this took count_error +95 -> +3 (near the
+  # oracle's +0 ceiling) and match rate 0/9 -> 4/9. The crowding invariant still blocks
+  # merging ever-simultaneous tracks, so a wider gap can't recreate the collapse.
+  gap_frames: 3000 # max frame gap between a track ending and its re-appearance (~100s)
+  max_anchor_dist: 400 # px; a returning person may re-enter a little off from where they left
+  min_similarity: 0.6 # cosine floor on mean OSNet embeddings to merge
+
+stationarity:
+  # A track counts as a kiosk visit only if it lingers: either its in-ROI dwell
+  # reaches min_dwell_s, or it holds nearly still (anchor step <= max_step_px/frame)
+  # for at least min_still_frames consecutive frames. Drops people who cross the ROI
+  # interior at walking pace, which zone hardening (edge-clip only) can't catch.
+  min_dwell_s: 3.0
+  max_step_px: 4.0
+  min_still_frames: 15
+
+staff:
+  # Staff uniform: a horizontal green-over-red-over-white chest stripe on an
+  # all-black outfit + dark head covering. A frame is staff only if a chest band
+  # holds both a saturated-green and a saturated-red cluster AND green sits above
+  # red (the uniform's layout); a track is staff only if that holds across
+  # min_staff_frame_frac of its frames. HSV ranges (OpenCV: H 0-179, S/V 0-255) are
+  # calibrated from real staff crops - re-tune against the full video if needed.
+  stripe_band: [0.18, 0.45] # chest band, as fractions of box height from the top
+  green_hsv_low: [35, 70, 40]
+  green_hsv_high: [90, 255, 255]
+  # Red on the high wraparound side only: the staff are dark-skinned and skin sits at
+  # hue ~0-15 (pure-red's low side), so the low side is excluded to keep skin out.
+  red_hsv_low: [155, 90, 50]
+  red_hsv_high: [179, 255, 255]
+  min_cluster_frac: 0.03 # min share of band pixels in a hue cluster to count it present
+  min_staff_frame_frac: 0.7 # min share of a track's frames matching to flag it staff
+
+dwell:
+  # A track's ROI presence splits into a new segment when its anchor leaves the ROI
+  # for more than this many frames ("left for good"); per-track segment durations
+  # are summed, mirroring how GT sums repeated visits under one person_id.
+  segment_gap_frames: 30
+
+# Frame range used by run.py --slice for fast iteration: the dense/crowded window
+# from the baseline diagnostic (covers P1-P9), where fragmentation and staff show
+# up hardest. Not a tuning knob - the full video is the default when --slice is off.
+eval_slice: [26700, 71000]
+
+eval:
+  min_iou: 0.5 # min temporal IoU for a predicted track to match a GT person
+
+overlay:
+  # The renderer draws the pipeline's surviving boxes per frame, which the interval
+  # tracks.yaml can't carry, so run.py emits render_frames.yaml (into --out-dir) when
+  # this is on. Keep it off for full-video analytics runs, where a per-frame artifact
+  # over 216k frames would be large. Output path and codec drive src/overlay/renderer.py.
+  emit_render_frames: false
+  output_path: outputs/overlay_slice.mp4
+  codec: mp4v # OpenCV VideoWriter fourcc

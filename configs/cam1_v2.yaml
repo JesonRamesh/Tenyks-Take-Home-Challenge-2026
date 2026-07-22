@@ -1,0 +1,145 @@
+# Per-camera config for kiosk "cam1" — detector+tracker v2.
+#
+# v2 replaces the two pieces the Phase 5 diagnostics pinned as the remaining failure
+# sources: YOLOv8n's NMS (merges adjacent people into one box, worsening with density)
+# and motion-only ByteTrack + a bolted-on post-hoc stitch (whose gap/anchor/similarity
+# were fit to ByteTrack's specific fragmentation pattern). Detector is NMS-free; the
+# tracker associates on appearance internally, so the custom stitch is off entirely.
+# The ROI, staff, stationarity and dwell blocks are unchanged from configs/cam1.yaml —
+# only the identity pipeline differs, so a comparison isolates it.
+camera_id: cam1
+
+# Image-space polygon (pixels, 1280x720) enclosing the kiosk interaction zone:
+# the floor where people stand to use or queue for the self-order kiosks. A track
+# counts as "in the zone" only while its bottom-center anchor is inside.
+kiosk_roi:
+  roi_polygon:
+    - [408, 681]
+    - [704, 332]
+    - [1017, 388]
+    - [1007, 721]
+    - [413, 721]
+  # The bottom edge sits just past the frame's last row (720) on purpose. A person at
+  # the near edge is cut off by the frame, so their box bottom clamps to the image
+  # boundary; a polygon edge drawn at 716 (or exactly at 720, where ray-casting is
+  # boundary-ambiguous) silently drops them. The floor continues past the visible frame,
+  # so the ROI must too — otherwise the gate depends on how far a given detector extends
+  # an edge-cut box, which is a detector quirk, not scene geometry. See decisions.md.
+  # Fraction of a box's height, measured up from the feet, that must fall inside
+  # the polygon for the track to count as in-zone. Hardens the old feet-only test
+  # against edge-clipping walkers and boundary-grazing phantom boxes.
+  box_depth_frac: 0.4
+  # Minimum box width-to-height ratio for a detection to count as a person. Kept from
+  # the baseline: it is what stops phantom signage slivers forming tracks and diluting
+  # the staff verdict. Re-checked against this detector's box statistics in Step 1.
+  min_box_aspect: 0.1
+
+detector:
+  # Set-based and NMS-free, so adjacent people are separated by the decoder's one-query-
+  # per-object assignment rather than suppressed by an IoU threshold. Chosen over
+  # RT-DETR-R18 in Step 1: equal or better count_error on all three windows, 4/4 vs 3/4
+  # identity recovery in the crowd, half the boxes per frame and ~2x the throughput.
+  # Needs transformers>=5.1 (.venv-rfdetr); reaches the pipeline via a detection cache.
+  type: rfdetr
+  model: rfdetr-nano
+  # Low feed threshold on purpose: the tracker's two-stage association consumes the
+  # low-confidence boxes and does the real high/low gating via track_high_thresh.
+  confidence: 0.1
+  classes: [0] # COCO "person"
+  imgsz: 640
+  device: auto # cuda if available, else mps, else cpu
+
+tracker:
+  # BoT-SORT: ByteTrack-lineage association (the engine that won the Phase 5 bake-off)
+  # plus OSNet appearance inside the data-association step, so identity recovery is the
+  # tracker's job rather than a post-hoc merge. params override boxmot's own defaults;
+  # anything unset stays at boxmot's value. Tuned in Step 3 for this detector's output.
+  type: botsort
+  reid_weights: weights/osnet_x0_25_msmt17.pt
+  half: false # fp16 ReID inference; false keeps fp32 for a clean comparison
+  # Tuned in Step 3 for RF-DETR's output, NOT inherited from the ByteTrack-era values.
+  # Anything unset stays at boxmot's default.
+  params:
+    # RF-DETR emits many low-confidence queries; a high bar to *spawn* an identity is the
+    # single biggest lever on fragmentation (crowded +18 -> +8). Deliberately 0.85, not the
+    # 0.90 that scored ~1 count better: RF-DETR's confidence ceiling is ~0.943, so 0.95
+    # yields zero tracks at all, and 0.90 leaves only ~0.04 of headroom. 0.85 keeps ~0.09
+    # and the count curve is flat across 0.80-0.88, so this buys robustness on an unseen
+    # video for ~1 count. See the sensitivity sweep in decisions.md.
+    new_track_thresh: 0.85
+    # BoT-SORT masks its appearance distance wherever IoU distance exceeds this, so at the
+    # 0.5 default appearance can never re-claim a track that has drifted -- which is why
+    # appearance_thresh alone measured as completely inert. Opening it is what makes the
+    # built-in ReID actually load-bearing for re-identification after occlusion.
+    proximity_thresh: 0.99
+    # ~10s of lost-track lifetime (vs 1s default). Longer saturates: with the proximity
+    # gate open, re-entries beyond this are recovered by the post-hoc stitch instead.
+    track_buffer: 300
+    # Tightened from 0.25 now that proximity no longer masks it: this is the precision
+    # guard that keeps purity at 1.000 while the gates above merge more aggressively.
+    appearance_thresh: 0.15
+
+reid:
+  # ON, but only after measuring that it is still needed rather than assuming it. Tuned
+  # BoT-SORT alone reaches crowded +9; adding the stitch takes it to +3 at unchanged 4/4
+  # matching. The reason is structural, not a threshold: BoT-SORT can only re-claim a lost
+  # track through its first association, whose appearance term is masked by IoU proximity
+  # and whose candidates expire with track_buffer -- so it handles occlusion but cannot
+  # re-identify someone returning minutes later. The stitch covers exactly that gap.
+  # Values re-derived by sweeping gap x similarity for THIS combination, not inherited:
+  # gap 900 -> +5, 3000 -> +3, 9000 -> +3 (no further gain, wider merge risk);
+  # similarity 0.5 -> loses a match (over-merges), 0.7 -> +4, 0.6 -> best.
+  post_hoc_stitch: true
+  model: weights/osnet_x0_25_msmt17.pt
+  gap_frames: 3000 # ~100s; the narrowest gap reaching the best count
+  max_anchor_dist: 400
+  min_similarity: 0.6
+
+stationarity:
+  # A track counts as a kiosk visit only if it lingers: either its in-ROI dwell
+  # reaches min_dwell_s, or it holds nearly still (anchor step <= max_step_px/frame)
+  # for at least min_still_frames consecutive frames. Drops people who cross the ROI
+  # interior at walking pace, which zone hardening (edge-clip only) can't catch.
+  min_dwell_s: 3.0
+  max_step_px: 4.0
+  min_still_frames: 15
+
+staff:
+  # Staff uniform: a horizontal green-over-red-over-white chest stripe on an
+  # all-black outfit + dark head covering. A frame is staff only if a chest band
+  # holds both a saturated-green and a saturated-red cluster AND green sits above
+  # red (the uniform's layout); a track is staff only if that holds across
+  # min_staff_frame_frac of its frames. HSV ranges (OpenCV: H 0-179, S/V 0-255) are
+  # calibrated from real staff crops - re-tune against the full video if needed.
+  stripe_band: [0.18, 0.45] # chest band, as fractions of box height from the top
+  green_hsv_low: [35, 70, 40]
+  green_hsv_high: [90, 255, 255]
+  # Red on the high wraparound side only: the staff are dark-skinned and skin sits at
+  # hue ~0-15 (pure-red's low side), so the low side is excluded to keep skin out.
+  red_hsv_low: [155, 90, 50]
+  red_hsv_high: [179, 255, 255]
+  min_cluster_frac: 0.03 # min share of band pixels in a hue cluster to count it present
+  min_staff_frame_frac: 0.7 # min share of a track's frames matching to flag it staff
+
+dwell:
+  # A track's ROI presence splits into a new segment when its anchor leaves the ROI
+  # for more than this many frames ("left for good"); per-track segment durations
+  # are summed, mirroring how GT sums repeated visits under one person_id.
+  segment_gap_frames: 30
+
+# Frame range used by run.py --slice for fast iteration: the dense/crowded window
+# from the baseline diagnostic (covers P1-P9), where fragmentation and staff show
+# up hardest. Not a tuning knob - the full video is the default when --slice is off.
+eval_slice: [26700, 71000]
+
+eval:
+  min_iou: 0.5 # min temporal IoU for a predicted track to match a GT person
+
+overlay:
+  # The renderer draws the pipeline's surviving boxes per frame, which the interval
+  # tracks.yaml can't carry, so run.py emits render_frames.yaml (into --out-dir) when
+  # this is on. Keep it off for full-video analytics runs, where a per-frame artifact
+  # over 216k frames would be large. Output path and codec drive src/overlay/renderer.py.
+  emit_render_frames: true
+  output_path: outputs/overlay_v2_crowded.mp4
+  codec: mp4v # OpenCV VideoWriter fourcc
