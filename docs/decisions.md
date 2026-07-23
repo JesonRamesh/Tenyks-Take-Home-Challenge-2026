@@ -1324,3 +1324,34 @@ clean full-body crop. To *prove* the confound rather than assume it, tomorrow's 
 should additionally restrict same/different pairs to **solo-present tracks** (frames where GT
 says exactly one person is in the window), which cleanly separates "measurement artifact" from
 "real ReID failure". Only after that is a verdict on stronger-ReID defensible.
+
+### User observation (for tomorrow) — two distinct ID-switch modes, only one is ReID-fixable
+
+User reports ID switches are frequent **when one person passes in front of another**, plus a
+separate case where **a new person enters carrying an old person's ID**. These are different
+problems with different fixes; do not conflate them tomorrow.
+
+**Mode 1 — crossing / pass-in-front swap (frame-level, in the TRACKER).**
+Two people's boxes overlap during a crossing; the tracker's association swaps IDs. Critical:
+in main's pipeline **the ReID backbone is not in the association path** — ByteTrack associates on
+motion+IoU only, and OSNet runs only in the post-hoc stitch, which links an ended track to a
+later-started one. During a crossing both tracks are simultaneously active, so the stitch's
+no-simultaneous-merge invariant refuses to touch them. => **Swapping reid.model cannot fix
+crossing swaps in main.** The only appearance lever for crossings is appearance-IN-association
+(BoT-SORT / v2), and even that is degraded by occluded crops during the crossing. Tomorrow:
+quantify whether v2 (BoT-SORT) has fewer crossing swaps than main on a crossing clip — that is a
+tracker question, not a backbone question.
+
+**Mode 2 — new person inherits an old ID (wrong re-link, in the STITCH / re-activation).**
+This is the id-50 / dwell-carryover bug: the gap-stitch merges a new person onto an old ID when
+appearance similarity crosses threshold. **This is the one a stronger backbone can genuinely
+help** — if it separates the two on clean crops. This is exactly what the re-entry test targets.
+
+**Calibrated expectation set with the user: "no ID switches" is NOT a realistic target on this
+top-down camera.** A stronger backbone may reduce Mode 2 (wrong re-links); it will do little for
+Mode 1 (crossings), which is a tracker/occlusion problem. Report this split honestly rather than
+promising switch-free tracking.
+
+Tomorrow's order: (1) re-entry ReID separation test with solo-present restriction (Mode 2, the
+backbone question); (2) crossing-swap count main vs v2 (Mode 1, the tracker question); then a
+combined, honest verdict on what the extra compute actually buys.
