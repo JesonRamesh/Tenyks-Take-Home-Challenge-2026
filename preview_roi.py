@@ -13,11 +13,18 @@ elsewhere, which is the mistake this is here to catch.
 Edit configs/roi_candidate.yaml between runs. Nothing here writes to a pipeline config:
 adopting a polygon is a deliberate copy you make yourself.
 
-Scope caveat, stated because it changes how the output should be read: boxes come from
-the run's render artifact, which contains only detections that already *passed* the
-current gate. So this shows what a candidate polygon would REMOVE, and cannot show what a
-tighter current polygon is wrongly excluding today. Widening a polygon therefore reads as
-"no change" here even when it would admit new boxes in a real run.
+Two caveats, both of which change how the output should be read:
+
+1. Boxes come from the run's render artifact, which contains only detections that already
+   *passed* the current gate. So this shows what a candidate would REMOVE, and cannot show
+   what a tighter current polygon is wrongly excluding today. Widening reads as "no change"
+   here even when it would admit new boxes in a real run.
+2. The per-frame IN/OUT verdict is exact, but the window table is an APPROXIMATION and has
+   already been wrong once. It replays existing boxes through the new polygon, whereas a
+   real run re-tracks from scratch: fewer in-zone frames change what the tracker associates,
+   what the stitch merges and what clears the stationarity gate. A track this table reports
+   as merely shrinking can disappear entirely in a real run. Treat this as a fast first
+   filter and confirm any candidate by re-scoring the windows with sweep_botsort.py.
 """
 
 from __future__ import annotations
