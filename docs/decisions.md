@@ -1116,3 +1116,62 @@ Method note: `preview_roi.py`'s window-level table is an approximation and was w
 it reported track 7 as shrinking when a real re-run lost it entirely, because the pipeline
 re-tracks from scratch and fewer in-zone frames change association, stitching and the
 stationarity outcome. Per-frame IN/OUT is exact; window-level claims need a re-score.
+
+## Full-video run — main's pipeline on a T4 (the authoritative result)
+
+YOLOv8n + ByteTrack + crowding-invariant stitch + OSNet long-gap merge, run end-to-end over
+all 216,306 frames on a Colab T4 with `configs/cam1.yaml` exactly as committed — original ROI
+polygon (bottom edge 716, **not** the Phase 6 fix) and `min_staff_frame_frac: 0.7`.
+
+| metric | value |
+| ------ | ----- |
+| GT people | 18 |
+| predicted | 41 |
+| **count_error** | **+23** |
+| **matched** | **9/18** |
+| dwell MAE | 82.9s |
+| dwell MAPE | 26.91% |
+| staff flagged | 1, **0 false positives** |
+| **throughput** | **34.79 FPS** (216,306 frames in 6218s = 1.73h) |
+| peak VRAM allocated | 0.194 GB |
+| peak VRAM reserved | 0.331 GB |
+| **peak VRAM device (nvidia-smi)** | **0.493 GB** |
+
+### This supersedes the Phase 3 "Final results" row
+
+That row (157 tracks, count_error +139, 4/18 matched, dwell MAE 46.5s) predates the Phase 5
+work now on main — the OSNet long-gap merge, the crowding invariant, the aspect gate and the
+dominant-segment staff verdict. Measured end-to-end with all of it:
+
+| | Phase 3 final | **this run** |
+| --- | --- | --- |
+| predicted | 157 | **41** |
+| count_error | +139 | **+23** |
+| matched | 4/18 | **9/18** |
+| dwell MAE | 46.5s | 82.9s |
+
+**The dwell MAE increase is largely an artifact and should not be reported as a regression.**
+MAE is computed over matched pairs only; going from 4 to 9 matched people pulls in five harder
+cases that previously contributed nothing to the average. The two figures are not computed over
+comparable populations.
+
+### Constraint compliance
+
+- **Real-time: yes.** 34.79 FPS against the 30.077 fps source rate, i.e. the pipeline processes
+  a 2h recording in 1.73h on the T4 edge target.
+- **VRAM: 0.493 GB, 3.1% of the 16 GB budget.** This is the first *device-level* measurement in
+  the project (sampled from nvidia-smi throughout the run) rather than PyTorch's allocator
+  counters. The gap between the two is **0.162 GB**, consistent with the 0.114–0.148 GB seen on
+  the window runs and matching the size of a CUDA context. Confirms the earlier finding: the
+  allocator figures were sound but understated true footprint by roughly that fixed amount.
+
+### Two caveats on this number
+
+- **The ROI fix is not in it.** `cam1.yaml` still carries the 716 bottom edge. On the window
+  tests that fix took the sparse window from 0/1 matched and 18.5% coverage to 1/1 and 100%, so
+  a full-video run with `cam1_roifix.yaml` should be better again. Not yet measured end-to-end.
+- **Staff recall is low: 1 flagged, against 7 in the Phase 3 run.** Zero false positives, so
+  nothing is wrongly excluded, but this is the dilution mechanism already quantified in Phase 6 —
+  the long-gap merge produces longer staff tracks that include frames where the chest stripe is
+  not visible, pulling the pooled fraction under the 0.7 threshold. `cam1_v2.yaml` uses 0.5 on
+  measured separability; `cam1.yaml` was deliberately left at 0.7 to keep it identical to main.
