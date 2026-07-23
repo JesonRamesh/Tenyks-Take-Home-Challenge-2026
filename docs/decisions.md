@@ -991,3 +991,87 @@ unmeasurable on this dev machine (`torch.cuda.max_memory_reserved()` reads 0.0 o
 and VRAM must come from CUDA hardware. The doc pins the install order that keeps Colab's CUDA
 torch intact — `boxmot` goes in with `--no-deps` because its `torchvision<0.18` / `numpy==1.26.4`
 pins would otherwise downgrade the GPU stack out from under `rfdetr`.
+
+## Phase 6 (cont. 2) — real T4 numbers, and the visual review
+
+### T4 measurements (Colab, live detector, 3 windows, both pipelines)
+
+The first real CUDA numbers in this project for v2. Throughput and VRAM measured on device;
+`peak_vram_reserved_gb` is run.py's own counter, `device_peak` is sampled from `nvidia-smi`
+throughout the run so it includes the CUDA context the allocator counter cannot see.
+
+| config | window | FPS (T4) | torch reserved | device peak | context gap |
+| ------ | ------ | -------- | -------------- | ----------- | ----------- |
+| v2 | sparse  | **8.71** | 0.250 GB | 0.364 GB | 0.114 GB |
+| v2 | Slice B | **8.04** | 0.250 GB | 0.364 GB | 0.114 GB |
+| v2 | crowded | **8.29** | 0.250 GB | 0.364 GB | 0.114 GB |
+| baseline+ROI-fix | sparse  | **31.79** | 0.099 GB | 0.245 GB | 0.146 GB |
+| baseline+ROI-fix | Slice B | **31.57** | 0.099 GB | 0.245 GB | 0.146 GB |
+| baseline+ROI-fix | crowded | **28.58** | 0.101 GB | 0.249 GB | 0.148 GB |
+
+**Accuracy is identical on CUDA and MPS** — sparse +0 (1/1), Slice B +1 (2/2), crowded +3
+(4/4), staff FP 0 — confirming the determinism claim the comparison table rests on. Only dwell
+MAE moved marginally (crowded 10.01s MPS → 9.6s CUDA), the documented detector-float difference.
+
+**Is the VRAM measurement sound? Yes — it understates by the CUDA context and nothing else.**
+The gap between the allocator counter and true device usage is a consistent **0.114–0.148 GB**
+across every run and both pipelines, exactly the signature of a fixed per-process CUDA context.
+`reset_peak_memory_stats()` runs after model construction, which is correct because it resets
+peak *to current*, so weights stay counted. So the historical "under 1 GB" figures were right,
+just low by ~0.12 GB. Both pipelines are trivially inside the 16 GB budget: **v2 0.364 GB
+(2.3%)**, **baseline 0.249 GB (1.6%)**. VRAM is a non-issue and was never the binding constraint.
+
+**Two of my predictions were wrong, recorded so the reasoning isn't reused:**
+- I extrapolated v2 at ~17 FPS on T4 from a 1.4x MPS→T4 ratio observed for the YOLOv8n pipeline.
+  **Actual is 8.3 FPS — T4 is *slower* than local MPS (12.1) for RF-DETR, the opposite direction.**
+  The ratio measured on a small CNN does not transfer to a DETR-family transformer; T4 has no
+  fp16 tensor-core path engaged here and its fp32 throughput is modest.
+- I estimated the CUDA context at 0.3–0.8 GB. **Actual is 0.114–0.148 GB**, so the understatement
+  in the old numbers was much smaller than I implied.
+
+### Throughput is the deciding constraint
+
+| | v2 | baseline+ROI-fix |
+| --- | --- | --- |
+| worst-window FPS (T4) | 8.29 | 28.58 |
+| vs ~30.08 fps source rate | **0.28x** | 0.95x |
+| full video (216,306 frames) | **~7.25 h** | **~2.10 h** |
+
+Neither clears real time on a T4, but v2 misses by **3.6x** while the baseline is essentially at
+it. RF-DETR ships an untested `optimize_for_inference(dtype=torch.float16)` path (Roboflow claim:
+~8x on T4 tensor cores) which would plausibly close this — **not enabled or tested here**, and
+noted as the first lever if v2 is revisited, not as a claimed result.
+
+### Visual review of the crowded overlay — two confirmed, quantified limitations
+
+Reviewed the rendered crowded window. Both known issues are visible and neither is fixed; they
+are recorded as measured limitations rather than described as solved.
+
+**1. Staff still counted as customers (false negatives).** A staff member in full uniform —
+green-over-red chest stripe clearly visible — renders as an orange customer box. Verified in the
+data: in the crowded window the merged tracks overlapping known staff sightings score
+
+| raw track | staff_frac | dwell | overlaps staff sighting |
+| --------- | ---------- | ----- | ----------------------- |
+| 25 | 0.793 | 13.2s | 510, 512 — **flagged correctly** |
+| 23 | 0.390 | 16.5s | 510, 512 — missed |
+| 4  | 0.339 | 83.2s | 471 — missed |
+| 19 | 0.226 | 68.0s | 510, 512 — missed |
+
+So at `min_staff_frame_frac: 0.5`, **1 of 4 staff-overlapping tracks is caught**. This is the same
+dilution mechanism already documented (staff-680: 0.750 on solo frames → 0.581 pooled), and it
+scales with track length: the longer and more mobile the staff track, the more frames it contains
+where the stripe faces away or is occluded, and the lower the pooled fraction. Lowering the
+threshold under ~0.34 to catch track 4 was **not** done — the separability evidence covers 4 staff
+sightings and 5 customers, which is not enough to justify pushing the threshold that far, and the
+downside (flagging a real customer) is worse than the current overcount. **Quantified limitation:
+staff false positives 0; staff false negatives ~3 of 4 in the crowded window.**
+
+**2. People at the ROI edge counted as in-zone.** A person standing visually outside the kiosk
+zone is boxed and counted (3.4s dwell, just over the 3.0s `min_dwell_s` gate). The Phase 6 depth
+sweep already established `box_depth_frac` **cannot** fix this: every value above 0.4 costs a
+recovered identity in both pipelines (v2 4/4 → 3/4) and 5.4 points of baseline coverage, because
+the in-zone depth distribution is bimodal and the remaining marginal boxes are people genuinely
+standing at the boundary. The real lever is the **shape of `roi_polygon` at the kiosk-side edge**
+(and secondarily `min_dwell_s`, since this track cleared it by 0.4s) — a re-authoring job against
+the overlay, not a threshold sweep. Left unchanged and logged.
