@@ -36,10 +36,13 @@ import yaml
 from src.overlay import style
 
 _PANEL_TITLE = "Kiosk Analytics"
-# The camera burns its own timestamp into the top-right of every frame (measured at
-# y 0-59). The panel starts below that strip so the two never overlap — a translucent
-# panel laid over the timestamp makes both unreadable.
+# The camera burns graphics into both top corners — a timestamp at the right, a station
+# watermark at the left (measured ending near y=50). The panel starts below that band so
+# it never overlaps either; a translucent panel laid over burnt-in text makes both
+# unreadable.
 _PANEL_TOP = 68
+_PANEL_LEFT = 16
+_PANEL_SIZE = (320, 128)
 
 
 def _draw_zone(frame: np.ndarray, polygon: np.ndarray, text: style.TextLayer, font) -> None:
@@ -96,19 +99,21 @@ def _draw_panel(
     count: int,
     avg_dwell: float,
 ) -> None:
-    width = frame.shape[1]
-    panel_w, panel_h = 268, 104
-    x2, y1 = width - 16, _PANEL_TOP
-    x1, y2 = x2 - panel_w, y1 + panel_h
-    style.rounded_rect(frame, (x1, y1), (x2, y2), style.PANEL_BG, radius=10, thickness=-1, alpha=0.78)
-    style.rounded_rect(frame, (x1, y1), (x2, y2), (70, 66, 62), radius=10, thickness=1, alpha=0.9)
+    panel_w, panel_h = _PANEL_SIZE
+    x1, y1 = _PANEL_LEFT, _PANEL_TOP
+    x2, y2 = x1 + panel_w, y1 + panel_h
+    # 0.86 rather than lower: the ceiling behind the top-left corner carries a vent and
+    # beam whose edges read through a thinner panel and make the figures look patchy.
+    # The scene is still faintly visible, which is the point.
+    style.rounded_rect(frame, (x1, y1), (x2, y2), style.PANEL_BG, radius=12, thickness=-1, alpha=0.86)
+    style.rounded_rect(frame, (x1, y1), (x2, y2), (70, 66, 62), radius=12, thickness=1, alpha=0.9)
     # Accent rule under the header separates branding from the live numbers.
-    cv2.line(frame, (x1 + 16, y1 + 36), (x2 - 16, y1 + 36), style.ACCENT, 1, cv2.LINE_AA)
-    text.add((x1 + 16, y1 + 12), _PANEL_TITLE, fonts["title"], style.ACCENT)
-    text.add((x1 + 16, y1 + 46), "People in zone", fonts["label"], (170, 170, 170))
-    text.add((x2 - 16, y1 + 44), str(count), fonts["value"], style.TEXT_COLOR, anchor="ra")
-    text.add((x1 + 16, y1 + 74), "Avg dwell (active)", fonts["label"], (170, 170, 170))
-    text.add((x2 - 16, y1 + 72), f"{avg_dwell:.1f}s", fonts["value"], style.TEXT_COLOR, anchor="ra")
+    cv2.line(frame, (x1 + 18, y1 + 42), (x2 - 18, y1 + 42), style.ACCENT, 1, cv2.LINE_AA)
+    text.add((x1 + 18, y1 + 14), _PANEL_TITLE, fonts["title"], style.ACCENT)
+    text.add((x1 + 18, y1 + 55), "People in zone", fonts["label"], (170, 170, 170))
+    text.add((x2 - 18, y1 + 52), str(count), fonts["value"], style.TEXT_COLOR, anchor="ra")
+    text.add((x1 + 18, y1 + 91), "Avg dwell (active)", fonts["label"], (170, 170, 170))
+    text.add((x2 - 18, y1 + 88), f"{avg_dwell:.1f}s", fonts["value"], style.TEXT_COLOR, anchor="ra")
 
 
 def render_frame(
@@ -142,8 +147,12 @@ def render_frame(
         size = style.text_size(label, fonts["label_bold"])
         lx1, ly1, lx2, ly2 = _place_label((x1, y1, x2, y2), size, taken, frame.shape[1])
         taken.append((lx1, ly1, lx2, ly2))
-        style.rounded_rect(frame, (lx1, ly1), (lx2, ly2), color, radius=5, thickness=-1)
-        text.add((lx1 + 8, ly1 + 5), label, fonts["label_bold"], (255, 255, 255))
+        # Tinted rather than solid, so the label reads as belonging to its box without
+        # punching an opaque hole in the scene. White bold text still carries at this
+        # alpha because the fill stays close to the box's saturated colour.
+        style.rounded_rect(frame, (lx1, ly1), (lx2, ly2), color, radius=5, thickness=-1, alpha=0.72)
+        text.add(((lx1 + lx2) // 2, (ly1 + ly2) // 2), label, fonts["label_bold"],
+                 (255, 255, 255), anchor="mm")
 
     avg = sum(active_dwells) / len(active_dwells) if active_dwells else 0.0
     _draw_panel(frame, text, fonts, customer_count, avg)
@@ -170,9 +179,9 @@ def main() -> None:
     frames = artifact["frames"]
 
     fonts = {
-        "title": style.load_font(17, bold=True),
-        "label": style.load_font(14),
-        "value": style.load_font(19, bold=True),
+        "title": style.load_font(20, bold=True),
+        "label": style.load_font(16),
+        "value": style.load_font(24, bold=True),
         "label_bold": style.load_font(15, bold=True),
         "zone": style.load_font(14, bold=True),
     }
