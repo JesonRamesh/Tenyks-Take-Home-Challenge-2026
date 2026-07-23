@@ -1355,3 +1355,27 @@ promising switch-free tracking.
 Tomorrow's order: (1) re-entry ReID separation test with solo-present restriction (Mode 2, the
 backbone question); (2) crossing-swap count main vs v2 (Mode 1, the tracker question); then a
 combined, honest verdict on what the extra compute actually buys.
+
+### Crossing-switch prevention + backbone leverage differs by pipeline (for tomorrow)
+
+**Preventing crossing swaps — levers, best-first for this camera:**
+1. Appearance IN association (BoT-SORT/v2 has it; ByteTrack/main does not — motion+IoU only).
+2. NMS-free detection (RF-DETR/v2 keeps two boxes where YOLO+NMS merges the crossing pair into
+   one, forcing an identity drop).
+3. Tracker choice (Phase 5 bake-off already picked BoT-SORT; occlusion-specialised trackers help
+   only marginally — appearance-under-occlusion is the real bottleneck).
+4. Ceiling: crops are occluded *during* the cross, so appearance is degraded exactly when needed;
+   crossings are reducible, not eliminable, on a top-down camera.
+=> The crossing fix is largely "use v2" — it already carries levers 1 and 2. Tomorrow's Mode-1
+test is therefore a tracker/architecture comparison (crossing-swap count main vs v2), not a
+backbone sweep.
+
+**Backbone leverage is asymmetric across pipelines — investigate BOTH but weight v2:**
+| | main (YOLO+ByteTrack) | v2 (RF-DETR+BoT-SORT) |
+| backbone in association? | NO (post-hoc stitch only) | YES (BoT-SORT) |
+| can backbone fix crossings (Mode 1)? | no | possibly |
+| can backbone fix wrong re-links (Mode 2)? | yes | yes |
+In main a better backbone only touches re-links; in v2 it can touch both crossings and re-links,
+and RF-DETR's cleaner boxes give better crops. So the ReID bake-off has more leverage on v2.
+Tomorrow: run diagnose_reid.py separation on BOTH YOLO boxes and RF-DETR boxes (only YOLO-crowded
+done tonight), on the re-entry window with the solo-present restriction.
