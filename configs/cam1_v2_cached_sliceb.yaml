@@ -1,0 +1,81 @@
+# v2 pipeline (RF-DETR + BoT-SORT) replaying cached RF-DETR detections for the sliceb
+# window, so it runs anywhere boxmot is installed WITHOUT rfdetr/transformers (which
+# conflict with the CUDA torch on Colab). The cache is RF-DETR's exact output at conf
+# 0.1, so results are bit-identical to a live run. Detector-inclusive FPS is NOT
+# measurable here (detection precomputed); cite the live T4 figures from decisions.md.
+camera_id: cam1
+detector:
+  type: cached
+  cache: outputs/det_cache/rfdetr_sliceb.npz
+  model: rfdetr-nano
+  confidence: 0.1
+  classes:
+  - 0
+  imgsz: 640
+  device: auto
+dwell:
+  segment_gap_frames: 30
+eval:
+  min_iou: 0.5
+eval_slice:
+- 26700
+- 30000
+kiosk_roi:
+  box_depth_frac: 0.4
+  min_box_aspect: 0.1
+  roi_polygon:
+  - - 408
+    - 681
+  - - 704
+    - 332
+  - - 1017
+    - 388
+  - - 1007
+    - 721
+  - - 413
+    - 721
+overlay:
+  emit_render_frames: true
+  output_path: outputs/overlay_v2_sliceb.mp4
+  codec: mp4v
+reid:
+  gap_frames: 3000
+  max_anchor_dist: 400
+  min_similarity: 0.6
+  model: weights/osnet_x0_25_msmt17.pt
+  post_hoc_stitch: true
+staff:
+  green_hsv_high:
+  - 90
+  - 255
+  - 255
+  green_hsv_low:
+  - 35
+  - 70
+  - 40
+  min_cluster_frac: 0.03
+  min_staff_frame_frac: 0.5
+  red_hsv_high:
+  - 179
+  - 255
+  - 255
+  red_hsv_low:
+  - 155
+  - 90
+  - 50
+  stripe_band:
+  - 0.18
+  - 0.45
+stationarity:
+  max_step_px: 4.0
+  min_dwell_s: 3.0
+  min_still_frames: 15
+tracker:
+  half: false
+  params:
+    appearance_thresh: 0.15
+    new_track_thresh: 0.85
+    proximity_thresh: 0.99
+    track_buffer: 300
+  reid_weights: weights/osnet_x0_25_msmt17.pt
+  type: botsort
