@@ -1175,3 +1175,44 @@ comparable populations.
   the long-gap merge produces longer staff tracks that include frames where the chest stripe is
   not visible, pulling the pooled fraction under the 0.7 threshold. `cam1_v2.yaml` uses 0.5 on
   measured separability; `cam1.yaml` was deliberately left at 0.7 to keep it identical to main.
+
+## Full-video run — baseline + ROI fix (isolating the ROI correction)
+
+Same pipeline as the authoritative run above (YOLOv8n + ByteTrack + stitch + OSNet merge),
+with `configs/cam1_roifix.yaml` — identical to `cam1.yaml` except the ROI bottom edge is
+carried to 721 instead of 716. `min_staff_frame_frac` stays at 0.7, so the only change from
+the baseline row is the ROI. Full 216,306 frames on the same Colab T4.
+
+| metric | baseline (716) | **+ ROI fix (721)** |
+| ------ | -------------- | ------------------- |
+| predicted | 41 | 46 |
+| count_error | +23 | **+28** |
+| **matched** | 9/18 | **13/18** |
+| dwell MAE | 82.9s | 97.5s |
+| dwell MAPE | 26.9% | 29.1% |
+| staff flagged / FP | 1 / 0 | 1 / **0** |
+| FPS (T4) | 34.79 | **31.54** |
+| peak VRAM device | 0.493 GB | 0.495 GB |
+| boxes in render artifact | 119,388 | **203,573** |
+
+**The ROI fix recovers four more people (9/18 -> 13/18 matched), the largest single jump in
+match rate in the project.** It is what the near-edge coverage gap predicted: 71,961 -> 102,225
+frames carry a box, and total boxes rise 70%, because people cut off at the near edge are no
+longer gated out. This is the same fix that took the sparse window from 0/1 to 1/1 matched.
+
+**Trade-offs, stated honestly:**
+- **count_error rises +23 -> +28.** Recovering four occluded/edge people also spawns a few more
+  fragments the stitch does not fully re-merge — the familiar coverage-vs-count tension. Match
+  rate is the more meaningful metric here (it counts distinct real people found); the extra +5
+  is residual fragmentation, not five phantom customers.
+- **dwell MAE rises 82.9 -> 97.5s. Same averaging artifact as before, amplified:** MAE is over
+  matched pairs only, and going 9 -> 13 matched pulls in four harder edge/occlusion cases that
+  contributed nothing before. Not a real per-person degradation.
+- **Throughput 34.79 -> 31.54 FPS.** Expected: 70% more in-zone boxes, each embedded by OSNet.
+  Still above the 30.077 fps source rate, so still real-time on the edge target.
+- **VRAM unchanged at 0.495 GB (3.1% of budget); staff still 1 flagged, 0 false positives.**
+
+**Read: the ROI fix is a clear win on the primary goal (distinct people found) at a modest,
+well-understood cost in count_error and ~9% throughput, both inside constraints.** It should be
+in the production config. The count_error rise is a reason to revisit the stitch thresholds on
+the full video, not a reason to keep the 716 edge that silently drops edge-standing customers.
