@@ -1302,3 +1302,25 @@ Commands to resume:
       --backbones weights/osnet_x0_25_msmt17.pt weights/osnet_x1_0_msmt17.pt \
       weights/osnet_ain_x1_0_msmt17.pt weights/resnet50_fc512_msmt17.pt weights/clip_market1501.pt \
       --out outputs/reid_sep_yolo_reentry.json
+
+### Correction — the crowded null is probably a confounded measurement, not proof ReID fails
+
+Pushed on why every backbone (2.9 MB OSNet to 350 MB CLIP) gives ~0 margin. A flat null
+across a 120x model-size range is a red flag for the *instrument*, not the data — ReID
+demonstrably works (90%+ mAP on Market/MSMT). Three confounds make the crowded window the
+wrong test:
+
+1. **Label noise from co-presence (dominant).** With P7/P8/P11/P12 all at the kiosk at once,
+   temporal-GT assignment cannot say which co-present person a track actually is, so a fraction
+   of "same-person" and "different-person" pair labels are flipped. Randomly-flipped labels
+   collapse the measured margin toward zero for ANY backbone — this alone can produce the null.
+2. **Degraded crops.** Crowd boxes are occluded / clipped / straddling two people; ReID models
+   are trained on clean full-body crops. Garbage in.
+3. **Cross-domain penalty (real but partial).** Market/MSMT are street-level side-view; this is
+   top-down CCTV. Out-of-distribution reduces — but does not zero — discriminability.
+
+The re-entry test (tomorrow) removes confounds 1 and 2: one person present (reliable label),
+clean full-body crop. To *prove* the confound rather than assume it, tomorrow's re-entry run
+should additionally restrict same/different pairs to **solo-present tracks** (frames where GT
+says exactly one person is in the window), which cleanly separates "measurement artifact" from
+"real ReID failure". Only after that is a verdict on stronger-ReID defensible.
