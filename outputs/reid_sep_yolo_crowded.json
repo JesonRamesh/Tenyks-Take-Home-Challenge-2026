@@ -1,0 +1,73 @@
+{
+  "config": "configs/cam1.yaml",
+  "slice": [
+    103000,
+    109000
+  ],
+  "tracks_kept": 53,
+  "results": {
+    "osnet_x0_25_msmt17": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.684,
+      "same_p10": 0.581,
+      "diff_median": 0.67,
+      "diff_p90": 0.78,
+      "margin": -0.2
+    },
+    "osnet_x0_5_msmt17": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.696,
+      "same_p10": 0.56,
+      "diff_median": 0.662,
+      "diff_p90": 0.783,
+      "margin": -0.223
+    },
+    "osnet_x1_0_msmt17": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.722,
+      "same_p10": 0.603,
+      "diff_median": 0.692,
+      "diff_p90": 0.803,
+      "margin": -0.2
+    },
+    "osnet_ain_x1_0_msmt17": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.682,
+      "same_p10": 0.548,
+      "diff_median": 0.637,
+      "diff_p90": 0.78,
+      "margin": -0.231
+    },
+    "osnet_ibn_x1_0_msmt17": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.634,
+      "same_p10": 0.482,
+      "diff_median": 0.583,
+      "diff_p90": 0.753,
+      "margin": -0.271
+    },
+    "resnet50_fc512_msmt17": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.912,
+      "same_p10": 0.857,
+      "diff_median": 0.906,
+      "diff_p90": 0.936,
+      "margin": -0.079
+    },
+    "clip_market1501": {
+      "same_pairs": 603,
+      "diff_pairs": 667,
+      "same_median": 0.478,
+      "same_p10": 0.28,
+      "diff_median": 0.416,
+      "diff_p90": 0.65,
+      "margin": -0.37
+    }
+  }
+}

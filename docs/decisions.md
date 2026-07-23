@@ -1240,3 +1240,65 @@ from main's committed pipeline (ROI edge and staff threshold), so:
 This is **not** the RF-DETR + BoT-SORT (v2) pipeline. "Best final" here means the best of the
 *old* detector/tracker family. v2 is a separate pipeline, evaluated per-window via the cached
 configs. The full comparison is: main (as committed) vs this best-old-family config vs v2.
+
+## Phase A (in progress) — ReID backbone bake-off: does more compute fix ID switching?
+
+Motivation: the full-video overlay shows ID switching and dwell carried over onto people as
+they "enter" (id 50 reappears 84s after leaving already showing 317.8s dwell — the long-gap
+OSNet stitch merging a re-appearance, sometimes onto the wrong person). VRAM headroom is huge
+(~0.5 of 16 GB), so the hypothesis was: swap the smallest OSNet (x0.25) for a stronger ReID
+backbone and open up the same-vs-different separation that bounds merge quality.
+
+`diagnose_reid.py` (new, read-only) measures, per backbone, the figure of merit from Phase 5:
+same-person 10th-pct cosine minus different-person 90th-pct cosine. **Positive margin = a
+threshold cleanly separates identities = the ID problem is solvable.** Reproduced the known
+negative baseline first (validates the method).
+
+**Result — YOLO boxes, crowded window (103000-109000), 603 same-person / 667 different-person
+pairs:**
+
+| backbone | same median | diff median | **median gap** | margin (p10−p90) | size |
+| -------- | ----------- | ----------- | -------------- | ---------------- | ---- |
+| osnet_x0_25 (current) | 0.684 | 0.670 | 0.014 | −0.20 | 2.9 MB |
+| osnet_x0_5     | 0.696 | 0.662 | 0.034 | −0.223 | ~5 MB |
+| osnet_x1_0     | 0.722 | 0.692 | 0.030 | −0.20 | ~9 MB |
+| osnet_ain_x1_0 (domain-general) | 0.682 | 0.637 | 0.045 | −0.231 | ~9 MB |
+| osnet_ibn_x1_0 | 0.634 | 0.583 | 0.051 | −0.271 | ~9 MB |
+| resnet50_fc512 | 0.912 | 0.906 | 0.006 | **−0.079** | ~90 MB |
+| clip_market1501 | 0.478 | 0.416 | 0.062 | −0.37 | ~350 MB |
+
+**Every backbone has a negative margin, and a tiny median gap (≤0.06).** On this crowded
+top-down window, same-person crops are on average only ~0.01–0.06 cosine more similar than
+different-person crops — barely any identity signal, *regardless of model size or type*. A 120×
+bigger model (CLIP) does not help; resnet50 crushes everything to ~0.91 (indiscriminate); the
+domain-generalizable OSNet variants give a marginally larger median gap but worse tails. This is
+a property of the **data** (top-down viewpoint, similar clothing, mutual occlusion, co-presence),
+not model capacity — exactly the risk flagged in the plan.
+
+**Preliminary suggestion: stronger ReID does NOT give a genuine improvement on crowded scenes.**
+The extra compute has no useful lever here through appearance. This aligns with the Phase 5
+finding that count is a merge-algorithm bottleneck with a co-presence ceiling temporal GT can't
+cross; the bake-off now adds that the appearance signal itself is too weak on this camera for any
+backbone to break that ceiling.
+
+### NOT YET DONE — the fair test, and tomorrow's resume point
+
+The crowded window is arguably the *wrong* test for the stitch's actual job. The stitch targets
+**long-gap re-entries** (a customer leaves, returns minutes later), where co-presence is low and a
+returning person genuinely looks like themselves. That is where a better backbone could still
+plausibly help, and it is untested. **Resume tomorrow with:**
+
+1. Re-run `diagnose_reid.py` on a **re-entry window** (the dense slice 26700-41960 covers P4-P9's
+   multiple visits) — same backbones, YOLO boxes. This is the decisive test.
+2. Repeat on **RF-DETR boxes** (`configs/cam1_v2_cached_crowded.yaml` and a cached re-entry
+   window) — cleaner boxes may give better crops; not yet measured.
+3. **Only if a positive (or clearly larger) margin appears there** does Phase B/C proceed (swap
+   backbone, retune gap/similarity, re-score windows + full video, then T4 FPS/VRAM). If the
+   re-entry margins are also negative/tiny, the honest conclusion is that the ID limitation is a
+   viewpoint/data problem, not a compute one — document it as a quantified ceiling and stop.
+
+Commands to resume:
+    .venv-boxmot/bin/python3 diagnose_reid.py --config configs/cam1.yaml --slice 26700 41960 \
+      --backbones weights/osnet_x0_25_msmt17.pt weights/osnet_x1_0_msmt17.pt \
+      weights/osnet_ain_x1_0_msmt17.pt weights/resnet50_fc512_msmt17.pt weights/clip_market1501.pt \
+      --out outputs/reid_sep_yolo_reentry.json
