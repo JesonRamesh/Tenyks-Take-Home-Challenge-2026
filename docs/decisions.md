@@ -1216,3 +1216,27 @@ longer gated out. This is the same fix that took the sparse window from 0/1 to 1
 well-understood cost in count_error and ~9% throughput, both inside constraints.** It should be
 in the production config. The count_error rise is a reason to revisit the stitch thresholds on
 the full video, not a reason to keep the 716 edge that silently drops edge-standing customers.
+
+### Correction to the entry above — that run was ROI fix + staff 0.5, not staff 0.7
+
+The comparison table above was mislabelled. It was written after checking the *committed*
+`cam1_roifix.yaml` (staff 0.7), but the Colab run edited its own copy to `min_staff_frame_frac:
+0.5` before running (the "best final" config). Evidence the run used 0.5, not 0.7:
+
+- The baseline run (staff 0.7) flagged one short staff track (461, 132 frames). This run
+  flagged a **different, long** track (398, spanning 91712–96380 ≈ 4668 frames) — precisely the
+  dilution case 0.5 recovers and 0.7 misses. Staff false positives remained 0 (track 398 matches
+  no GT customer).
+
+So the run is **YOLOv8n + ByteTrack + ROI fix + staff 0.5 — the best configuration of the
+baseline detector/tracker family**, not a clean single-variable ROI isolation. Two knobs differ
+from main's committed pipeline (ROI edge and staff threshold), so:
+
+- The **+4 matched (9→13)** is still attributable to the ROI fix — the staff threshold only moves
+  tracks between the customer and staff buckets and cannot *add* customer matches.
+- The staff-threshold change is what flips the flagged staff track from the short 461 to the real,
+  long 398, at no false-positive cost — the staff recall improvement, on the full video.
+
+This is **not** the RF-DETR + BoT-SORT (v2) pipeline. "Best final" here means the best of the
+*old* detector/tracker family. v2 is a separate pipeline, evaluated per-window via the cached
+configs. The full comparison is: main (as committed) vs this best-old-family config vs v2.
