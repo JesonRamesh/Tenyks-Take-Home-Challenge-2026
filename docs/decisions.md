@@ -1075,3 +1075,44 @@ the in-zone depth distribution is bimodal and the remaining marginal boxes are p
 standing at the boundary. The real lever is the **shape of `roi_polygon` at the kiosk-side edge**
 (and secondarily `min_dwell_s`, since this track cleared it by 0.4s) — a re-authoring job against
 the overlay, not a threshold sweep. Left unchanged and logged.
+
+### ROI re-authoring attempted and rejected — the polygon is not the lever
+
+The crowded overlay shows a track (ID 1) whose box is only half inside the zone on some
+frames, which looked like a zone-geometry problem. Three candidate polygons were authored
+and scored against the harness. All are worse than the production polygon:
+
+| polygon (top edge vertices) | crowded count_err | matched | GT lost |
+| --------------------------- | ----------------- | ------- | ------- |
+| **production** (704,332) (1017,388) | +3 | **4/4** | — |
+| (704,345) (1017,420) | +2 | 3/4 | **P8** |
+| (704,340) (1017,410) | +3 | 3/4 | **P8** |
+
+Sparse and Slice B are entirely insensitive to these edits (zero frames changed), so the
+effect is confined to the crowded window.
+
+The geometry explains why no edit along that edge can work:
+
+| track | depth-margin median | frames below the 0.40 gate |
+| ----- | ------------------- | -------------------------- |
+| track 7 (GT **P8**'s tail) | 0.619 | **0%** |
+| track 1 (the "half-in" ID 1) | **1.000** | **1%** |
+
+**ID 1 is not an edge case.** It sits fully inside the zone for 99% of its 4240 frames; the
+frame that looks wrong is a 1% transient where the person stepped to the back. P8's track
+sits *higher* in the image (feet-y median 481 vs ID 1's 631), squarely in the band a lowered
+top edge cuts through. So lowering that edge barely touches ID 1 and reliably destroys P8 —
+whose 11s tail matches at IoU 0.565, just over the 0.5 floor, and collapses to 0.23–0.26.
+
+ID 1 is a **fragmentation artifact, not a geometry one**: a spurious track thrown off by P11
+and P12 being co-present for the whole window, matching no GT person under any polygon
+tested. It is part of the residual +3 already attributed to the co-presence ceiling, and it
+would take better identity association to remove, not a tighter zone.
+
+**Decision: keep the production polygon.** Logged as a rejected avenue with its evidence so
+it is not re-attempted.
+
+Method note: `preview_roi.py`'s window-level table is an approximation and was wrong here —
+it reported track 7 as shrinking when a real re-run lost it entirely, because the pipeline
+re-tracks from scratch and fewer in-zone frames change association, stitching and the
+stationarity outcome. Per-frame IN/OUT is exact; window-level claims need a re-score.

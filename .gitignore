@@ -7,6 +7,10 @@ diagnose_coverage.py
 tune_stitch.py
 classify_tracks.py
 define_roi.py
+compare_detectors.py
+diagnose_staff_separability.py
+preview_roi.py
+configs/roi_candidate.yaml
 eval/label/no_overlap_review.yaml
 
 # large binaries and derived artifacts — not committed
@@ -33,6 +37,8 @@ weights/
 
 # cached detector output (dump_detections.py) — large binary, regenerated on demand
 outputs/det_cache/
+# review/preview stills — regenerated on demand, not deliverables
+outputs/*.png
 # per-point sweep run dirs — the sweep_rows.json summary is the artifact worth keeping
 outputs/sweep_*/*/
 outputs/bakeoff_*/*/
