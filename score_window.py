@@ -118,15 +118,23 @@ def main() -> None:
     row["name"] = args.name or args.run_dir.name
     (args.run_dir / "row.json").write_text(json.dumps(row, indent=2))
 
+    # Coverage/purity are absent whenever the run had no render artifact (a run made with
+    # emit_render_frames off, e.g. a throughput benchmark). Render them as "-" rather than
+    # failing: count_error and matched are still meaningful and are the point of scoring.
+    # Formatted into strings first — a width spec applied to the conditional itself would
+    # be handed None and raise.
     coverage = row.get("mean_coverage")
     purity = row.get("mean_purity")
+    coverage_text = "-" if coverage is None else f"{coverage:.1%}"
+    purity_text = "-" if purity is None else f"{purity:.3f}"
+    fps = row.get("fps")
     print(
         f"{row['name']:28s} count_err {row['count_error']:>+4d}  "
         f"matched {row['num_matched']}/{row['gt_count']}  "
-        f"cov {coverage if coverage is None else f'{coverage:.1%}':>6}  "
-        f"pur {purity if purity is None else f'{purity:.3f}':>5}  "
+        f"cov {coverage_text:>6}  "
+        f"pur {purity_text:>5}  "
         f"staffFP {row['staff_false_positives']}  "
-        f"dwellMAE {row['dwell_mae_s']:.1f}s  fps {row.get('fps', '-')}"
+        f"dwellMAE {row['dwell_mae_s']:.1f}s  fps {'-' if fps is None else f'{fps:.1f}'}"
     )
     if not args.quiet:
         print(json.dumps({k: v for k, v in row.items() if k != "per_person_coverage"}, indent=2))
