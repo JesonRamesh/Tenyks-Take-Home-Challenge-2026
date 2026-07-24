@@ -1679,3 +1679,79 @@ goal), the conservative stitch is the better operating point (dwell MAPE 24.2% v
 14 vs 13, staff recall 5 vs 1) and costs only the distinct-people count. Both configs are locked
 and reproducible; the choice is a product-priority decision, now backed by full-video numbers on
 both sides.
+
+## Correction — the conservative video's "missing people" is an MPS-vs-CUDA artifact, not the stitch
+
+Visual review of the conservative overlay showed it detecting far fewer people than the
+aggressive one. Investigated rather than accepted at face value, and it is a **device confound I
+introduced**, not a property of the conservative stitch:
+
+- **The stitch does not drop detections.** Replaying gap 3000 vs gap 900 on IDENTICAL raw tracks
+  (the conservative run's own stitch_state): gap 3000 keeps 141,653 boxes, gap 900 keeps 141,051
+  (97% vs 96% of raw in-zone boxes). The stitch only regroups ids; it does not gate people out.
+- **The real cause: MPS detects ~28% fewer people than CUDA.** The aggressive video was rendered
+  from the Colab **CUDA** run; the conservative one from a local **MPS** run. Measured: MPS has
+  85% as many frames-with-a-person and **72% as many in-zone boxes** (145,784 vs 203,573), running
+  ~1 person short on most crowded frames (3 vs 4, 3 vs 5). YOLOv8n on MPS materially under-detects
+  versus CUDA — the Phase 5 "detection floats differ" note, far larger than a float difference at
+  the box level.
+
+**Consequences, stated honestly:**
+1. **The conservative overlay I produced is not a fair visual A/B** — it is under-detected by the
+   device it ran on, not by the pipeline. A fair conservative-vs-aggressive video needs BOTH on
+   CUDA (Colab).
+2. **My earlier live A/B (conservative dwell 72.5 vs aggressive 97.5) was device-confounded**
+   (MPS conservative vs CUDA aggressive). The device-CLEAN A/B is the offline replay on identical
+   CUDA detections — gap 900 dwell MAE 67.4s vs gap 3000 82.9s — which still shows the dwell
+   improvement, so the count-vs-dwell conclusion holds directionally; the specific live numbers do
+   not isolate the stitch.
+3. **Lesson recorded:** local MPS renders are not representative of the CUDA pipeline for anything
+   detection-sensitive (coverage, visual review, count). Authoritative videos and coverage numbers
+   must come from CUDA. The conservative stitch remains a real dwell-vs-count lever (offline-proven),
+   but its full-video artifacts should be regenerated on CUDA before being used for comparison.
+
+## Phase 7 (separate experiment) — mask-memory tracking with SAM 2.1 / EdgeTAM
+
+Recorded here for completeness: a parallel investigation (its own `sam-pipeline` branch /
+`Tenyks-SAM-Experiment` project) tested whether a **video segmentation model's learned memory**
+maintains identity through occlusion better than the appearance-embedding stitching that both
+main (post-hoc OSNet) and v2 (BoT-SORT ReID) rely on — the exact identity limitation this project
+kept hitting. Distinct from the FastSAM experiment (Phase 5 cont. 3, correctly ruled out): that
+tested *unprompted* whole-frame segmentation (162 junk segments/frame); this tests *box-prompted
+video propagation with memory*, where YOLOv8n still detects and prompts, SAM only maintains the
+identity, and zone/stationarity/staff/dwell are reused unchanged.
+
+- **Models:** SAM 2.1 Hiera-tiny (39M) primary, EdgeTAM (13.9M) edge variant, via transformers'
+  `Sam2VideoProcessor` (swappable on a config string). Larger SAM 2.1 / SAM 3 ruled out (throughput;
+  SAM 3 is a detector+tracker in one, changing two variables).
+- **The load-bearing engineering finding — memory leak:** naive streaming grew live tensors
+  0.42 -> 3.62 GB over 40 frames (~80 MB/frame), fatal for a 6000-frame window and the 16 GB budget.
+  Fixed by pruning unreachable per-object outputs (older than ~16-24 frames are never read) and
+  streamed frames, plus explicit object retirement + contiguous re-indexing (cost then scales with
+  *concurrent* not *cumulative* people). After the fix: **~2 GB live tensors, bounded and flat over
+  6000-frame runs.**
+- **Results (EdgeTAM + YOLOv8n, MPS, 3 windows):**
+
+| window | count_err | matched | coverage | purity | dwell MAE | FPS (MPS) |
+| ------ | --------- | ------- | -------- | ------ | --------- | --------- |
+| sparse | +0 | 1/1 | 100% | 1.000 | 0.1s | 10.9 |
+| Slice B | +1 | 2/2 | 99.7% | 1.000 | 0.3s | 5.4 |
+| crowded | **+9** | **4/4** | 99.9% | 0.999 | **3.2s** | 2.4 |
+
+- **What it proved:** mask memory essentially SOLVES fragmentation — crowded dwell MAE **3.2s, the
+  best any pipeline produced** (v2 10.0s, main 60.4s), with only 2 duplicate identities across
+  6000 frames of a 4-person crowd (vs main's 38/32/16 fragments per person). Identity through
+  occlusion is genuinely better than appearance stitching.
+- **What it cost:** crowded count_err **+9 — the WORST any pipeline produced** (v2 +3, main +2), and
+  by the opposite mechanism: better persistence tracks *non-customers* (companions, lingerers) too
+  well, so they clear the 3s stationarity gate instead of shattering into sub-gate fragments as they
+  do on main/v2. Against a *behavioural* GT (only kiosk users counted), better tracking hurts count.
+- **Throughput:** slow — SAM 2.1-tiny ~1.9-2.4 FPS, EdgeTAM ~5-11 FPS (MPS). The brief has no
+  real-time requirement (offline batch analytics), so this is a cost, not a disqualifier. VRAM
+  against the 16 GB budget needs a CUDA run (MPS reads 0.0; ~2 GB live-tensor leak-check passes).
+
+**Read:** mask-memory tracking is the one approach that broke the fragmentation/identity ceiling
+appearance ReID could not (Phase A/B) — a genuinely different architecture, not a bigger backbone.
+Its cost is throughput and a count regression that is really a *stationarity/behavioural-filter*
+problem (too-good tracking of non-customers), not an identity failure. It is the strongest lead for
+future work on the identity problem, and unlike a stronger ReID backbone it is evidence-backed to help.
