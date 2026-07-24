@@ -1560,3 +1560,46 @@ ceiling — a single shared standing area viewed top-down — not a model-capaci
 problem. It is quantified (0.640 vs 0.615 cosine; 99% within the spatial gate; 5.9:1 base rate;
 84% of gated merges wrong) and is not addressable by a stronger or larger-window ReID. The
 current pipeline already operates near this ceiling; the honest deliverable is to document it.
+
+## Conservative-stitch test — a real in-scope lever, and a correction
+
+Motivation: the full run showed ~84% of long-gap merges are wrong, so the aggressive stitch
+may be net-harmful to DWELL. Swept stitch aggressiveness (gap_frames x min_similarity; gap 0 =
+stitch off), measuring the metric wrong merges corrupt most: dwell. Confirmed on the FULL video
+offline by replaying the stitch on the real full-run tracks (`colab_full/stitch_state.pkl`, 297
+raw tracks) — no re-run, no T4.
+
+**Full video (216k frames, 18 GT), replay of the real tracks:**
+
+| gap | sim | count_err | matched | dwell MAE | dwell MAPE | mean purity |
+| --- | --- | --------- | ------- | --------- | ---------- | ----------- |
+| 0 (stitch off) | 0.6 | +204 | 3/18 | 115.4s | 37.5% | 0.826 |
+| 900 | 0.6 | +60 | 8/18 | **67.4s** | **18.4%** | 0.678 |
+| 900 | 0.7 | +84 | 7/18 | 65.3s | 22.2% | 0.692 |
+| **3000 | 0.6 (CURRENT)** | **+23** | 9/18 | 82.9s | 26.9% | 0.615 |
+| 3000 | 0.7 | +51 | 9/18 | 78.4s | 25.0% | 0.634 |
+
+**Correction to "the pipeline is near its ceiling."** That was true for COUNT. It is NOT true
+for DWELL: the current config sits at a count-optimised point that is *bad* for dwell. A more
+conservative stitch (gap 900) cuts **dwell MAPE 26.9% -> 18.4%** and **dwell MAE 82.9s -> 67.4s**
+(a ~32% reduction in dwell error) and lifts purity, because it stops the wrong merges that dump a
+new person's frames onto an old id — exactly the failure the user reported.
+
+**But it is a TRADE on the same frontier, not a free win.** Conservative merging avoids wrong
+re-links by re-linking *less*, so genuine re-entries fragment: count_error rises **+23 -> +60** and
+matched dips 9 -> 8. This is the camera-geometry ceiling seen from the other side — appearance
+cannot tell a returning customer from a new one, so you get accurate dwell (don't merge) OR
+accurate count (merge, 84% wrong), not both.
+
+**So there IS an in-scope architectural lever, and it is a config change (gap_frames), no new
+backbone and no T4:**
+- For **dwell-time analytics** (the project's named goal), **gap 900 is better**: dwell MAPE
+  18.4% vs 26.9%, fewer wrong-id merges (the user's complaint), at a higher count_error.
+- For **distinct-people count**, the current gap 3000 is better (+23 vs +60).
+- The choice is a product-priority decision, not a technical unknown. Both points are now measured
+  on the full video.
+
+**This corrects the earlier "only out-of-scope solutions remain."** The ReID-backbone avenue is
+exhausted, but stitch POLICY is an in-scope lever with a measured ~32% dwell-error improvement
+available for free. Out-of-scope options (second camera / overhead-tuned model) remain the only
+path to beating the *count-vs-dwell frontier itself*; within it, the operating point is tunable.
