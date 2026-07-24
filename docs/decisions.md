@@ -1649,3 +1649,33 @@ new people the IDs of people who walked past earlier, corrupting count and dwell
 **Status:** a full-video conservative run (gap 900, else identical to the aggressive ROI-fix run)
 is being produced locally for a side-by-side overlay comparison, to distinct output paths so the
 aggressive run is preserved. Numbers + video to be appended when it completes.
+
+## Conservative-stitch — full-video LIVE run confirms the offline prediction
+
+Ran the full pipeline live (216,306 frames, local MPS, 73 min) with `configs/cam1_conservative.yaml`
+(identical to the aggressive ROI-fix run except reid.gap_frames 3000 -> 900). Clean A/B, both
+roifix + staff 0.5, only the stitch gap differs:
+
+| metric | aggressive (gap 3000) | conservative (gap 900) |
+| ------ | --------------------- | ---------------------- |
+| count_error | +28 | **+62** |
+| matched | 13/18 | **14/18** |
+| dwell MAE | 97.5s | **72.5s** |
+| dwell MAPE | 29.1% | **24.2%** |
+| staff flagged / FP | 1 / 0 | **5 / 0** |
+
+The live run confirms the offline replay directionally: **dwell MAE -25.6% (97.5 -> 72.5s), MAPE
+-16.8% relative (29.1 -> 24.2%)**, and it additionally *improved* matched (13 -> 14) and staff
+recall (1 -> 5 flagged, still 0 false positives — the shorter gap dilutes staff tracks less). The
+cost is count_error (+28 -> +62), from genuine re-entries fragmenting into separate ids. Exactly
+the count-vs-dwell trade, now verified on the full video.
+
+Outputs went to `outputs/full_conservative/` and `kiosk_overlay_conservative.mp4`; the aggressive
+run's `outputs/full_roifix/` and `kiosk_overlay_roifix.mp4` were preserved untouched. The two
+overlays share identical detections and differ only in ID grouping, for a direct visual A/B.
+
+**Bottom line for the deliverable:** if the priority is dwell-time accuracy (the project's named
+goal), the conservative stitch is the better operating point (dwell MAPE 24.2% vs 29.1%, matched
+14 vs 13, staff recall 5 vs 1) and costs only the distinct-people count. Both configs are locked
+and reproducible; the choice is a product-priority decision, now backed by full-video numbers on
+both sides.
