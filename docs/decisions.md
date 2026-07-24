@@ -1439,3 +1439,47 @@ There IS a genuine, evidence-backed improvement available, but bounded:
   the 3 windows + full video with reid.model=clip_market1501, score wrong-re-link / dwell / purity
   vs the osnet baseline; (Phase C) measure the T4 FPS hit — CLIP is much slower per crop, but the
   stitch embeds only in-zone track crops, so it is bounded. Commands provided to the user.
+
+## Phase B (local A/B) — a backbone swap in the stitch is NOT worth a full run
+
+Ran the decisive local test the user asked for: detection+tracking ONCE on the dense re-entry
+slice (26700-71000, 9 GT, 274 raw tracks, P4-P9 have genuine multi-visit re-entries — the exact
+wrong-re-link case), embedding every crop with all candidate backbones in the same pass, then
+replaying the exact post-stitch pipeline across a min_similarity sweep. Only the embedding
+differs, so any change is the backbone's. gap 3000 / anchor 400 throughout.
+
+**Current production point: osnet_x0_25 @ sim 0.6 -> count_err +4, 4/9 matched, mean_pur 0.937,
+min_pur 0.518.**
+
+| backbone | sim | count_err | matched | mean_pur | min_pur |
+| -------- | --- | --------- | ------- | -------- | ------- |
+| osnet_x0_25 (current) | 0.6 | **+4** | 4/9 | 0.937 | 0.518 |
+| osnet_x1_0 | 0.6 | +3 | 5/9 | 0.920 | 0.550 |
+| osnet_ain_x1_0 | 0.6 | +8 | 5/9 | 0.950 | 0.597 |
+| osnet_ain_x1_0 | 0.7 | +15 | 7/9 | 0.991 | 0.901 |
+| clip_market1501 | 0.5 | +13 | 7/9 | 0.969 | 0.655 |
+| clip_market1501 | 0.6 | +18 | 6/9 | 0.989 | 0.780 |
+
+**No backbone Pareto-beats the current one.** Every model sits on the SAME count-vs-purity
+frontier: to merge more genuine re-entries (raise matched, cut count_err) you must lower the
+threshold, which also merges more look-alike different people (drops purity), regardless of
+backbone. The Phase A median-gap advantages do NOT convert:
+
+- **CLIP under-merges.** Its 3.3x-better median separation is offset by a wide *same-person*
+  tail (pose/viewpoint sensitivity, same_p10 0.28 from Phase A): genuine re-entries fall below
+  threshold, so CLIP needs sim 0.5 to reach 7/9 matched and pays count_err +13 (vs current +4).
+  It never reaches the current +4 count at any threshold.
+- **Bigger/domain OSNet is within noise.** osnet_x1_0 @ 0.6 (+3, 5/9, min_pur 0.550) shifts by
+  <=1 count and <=0.03 purity vs current — inside single-slice noise, not a real win.
+- **The worst wrong-merge (min_pur ~0.5) is not fixable without ballooning count.** To get
+  min_pur > 0.8 any backbone needs sim ~0.7, costing count_err +12 to +15.
+
+**Cost of CLIP if run anyway:** 5.4x slower per crop (7.79 vs 1.44 ms/crop MPS). Embedding is a
+small fraction of pipeline time (in-zone boxes only, ~2% of the T4 run), so the full-video T4
+estimate is ~2.3-2.5 h (vs OSNet 1.9 h) at ~26 FPS — still real-time, VRAM ~0.6 GB. But it buys
+no accuracy, so the estimate is moot.
+
+**Verdict: do NOT run a full-video pass with a new ReID backbone.** The wrong-re-links the user
+sees are a property of the precision/recall frontier on this top-down camera, not a
+backbone-capacity limit — reconfirming, at the operating level, the Phase A finding. The local
+A/B (a ~15-min diagnostic) saved a ~2.5 h T4 run that would not have improved on the current best.
