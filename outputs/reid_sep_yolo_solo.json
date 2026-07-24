@@ -1,0 +1,126 @@
+{
+  "config": "configs/cam1.yaml",
+  "windows": [
+    [
+      85000,
+      91000
+    ],
+    [
+      26700,
+      41960
+    ],
+    [
+      41960,
+      56000
+    ],
+    [
+      135404,
+      155000
+    ]
+  ],
+  "tracks_kept": 154,
+  "solo_tracks": 17,
+  "solo_frac_threshold": 0.6,
+  "results": {
+    "osnet_x0_25_msmt17": {
+      "all": {
+        "same_pairs": 3096,
+        "diff_pairs": 8572,
+        "same_median": 0.765,
+        "same_p10": 0.565,
+        "diff_median": 0.615,
+        "diff_p90": 0.707,
+        "margin": -0.142
+      },
+      "solo": {
+        "same_pairs": 46,
+        "diff_pairs": 87,
+        "same_median": 0.705,
+        "same_p10": 0.541,
+        "diff_median": 0.58,
+        "diff_p90": 0.669,
+        "margin": -0.128
+      }
+    },
+    "osnet_x1_0_msmt17": {
+      "all": {
+        "same_pairs": 3096,
+        "diff_pairs": 8572,
+        "same_median": 0.769,
+        "same_p10": 0.564,
+        "diff_median": 0.599,
+        "diff_p90": 0.694,
+        "margin": -0.131
+      },
+      "solo": {
+        "same_pairs": 46,
+        "diff_pairs": 87,
+        "same_median": 0.722,
+        "same_p10": 0.523,
+        "diff_median": 0.552,
+        "diff_p90": 0.665,
+        "margin": -0.142
+      }
+    },
+    "osnet_ain_x1_0_msmt17": {
+      "all": {
+        "same_pairs": 3096,
+        "diff_pairs": 8572,
+        "same_median": 0.741,
+        "same_p10": 0.54,
+        "diff_median": 0.575,
+        "diff_p90": 0.67,
+        "margin": -0.13
+      },
+      "solo": {
+        "same_pairs": 46,
+        "diff_pairs": 87,
+        "same_median": 0.707,
+        "same_p10": 0.508,
+        "diff_median": 0.532,
+        "diff_p90": 0.634,
+        "margin": -0.126
+      }
+    },
+    "resnet50_fc512_msmt17": {
+      "all": {
+        "same_pairs": 3096,
+        "diff_pairs": 8572,
+        "same_median": 0.926,
+        "same_p10": 0.855,
+        "diff_median": 0.872,
+        "diff_p90": 0.906,
+        "margin": -0.052
+      },
+      "solo": {
+        "same_pairs": 46,
+        "diff_pairs": 87,
+        "same_median": 0.898,
+        "same_p10": 0.843,
+        "diff_median": 0.867,
+        "diff_p90": 0.901,
+        "margin": -0.058
+      }
+    },
+    "clip_market1501": {
+      "all": {
+        "same_pairs": 3096,
+        "diff_pairs": 8572,
+        "same_median": 0.664,
+        "same_p10": 0.291,
+        "diff_median": 0.384,
+        "diff_p90": 0.544,
+        "margin": -0.254
+      },
+      "solo": {
+        "same_pairs": 46,
+        "diff_pairs": 87,
+        "same_median": 0.694,
+        "same_p10": 0.277,
+        "diff_median": 0.281,
+        "diff_p90": 0.436,
+        "margin": -0.159
+      }
+    }
+  }
+}

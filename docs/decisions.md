@@ -1379,3 +1379,63 @@ In main a better backbone only touches re-links; in v2 it can touch both crossin
 and RF-DETR's cleaner boxes give better crops. So the ReID bake-off has more leverage on v2.
 Tomorrow: run diagnose_reid.py separation on BOTH YOLO boxes and RF-DETR boxes (only YOLO-crowded
 done tonight), on the re-entry window with the solo-present restriction.
+
+## Phase A complete — the solo-restricted test (the confound control)
+
+Ran the separation bake-off with the solo-present control: pooled 4 low-co-presence windows
+(85000-91000 P10, 26700-41960 P1, 41960-56000 P4/P5, 135404-155000 P13/P15), restricting
+same/different pairs to SOLO tracks (>=60% of frames with exactly one GT person present) so
+labels are unambiguous AND crops unoccluded. 17 solo tracks, 46 same / 87 different pairs.
+
+**SOLO-restricted separation (clean labels, clean crops) — the fair test:**
+
+| backbone | same median | diff median | **median gap** | margin (p10−p90) |
+| -------- | ----------- | ----------- | -------------- | ---------------- |
+| osnet_x0_25 (current) | 0.705 | 0.580 | 0.125 | −0.128 |
+| osnet_x1_0     | 0.722 | 0.552 | 0.170 | −0.142 |
+| osnet_ain_x1_0 | 0.707 | 0.532 | 0.175 | −0.126 |
+| resnet50_fc512 | 0.898 | 0.867 | 0.031 | −0.058 |
+| **clip_market1501** | 0.694 | **0.281** | **0.413** | −0.159 |
+
+**Two corrections to earlier conclusions, both from this table:**
+
+1. **The crowded null WAS largely a confound.** Crowded median gaps were 0.006-0.062; on clean
+   solo crops they rise to 0.125-0.413. Co-presence label noise + occlusion were suppressing the
+   measured signal, exactly as predicted. My "no backbone separates" (crowded-based) was wrong.
+
+2. **But "a bigger backbone fixes it" is also wrong — it's in between.** No backbone achieves
+   *clean* separation (every p10−p90 margin is still negative: the tails always overlap, because
+   even on this camera some same-person crops look different, pose to pose, and some different
+   people dress alike). So switch-free tracking is not achievable by ReID here. HOWEVER, at the
+   **median**, a stronger backbone genuinely discriminates far better: **CLIP-ReID's median gap
+   0.413 is 3.3x the current osnet_x0_25's 0.125.** osnet_x1_0 / ain (~0.17) help modestly;
+   resnet50 is useless (features crushed to ~0.9); CLIP is the clear standout.
+
+**Operating-point reading (why the median gap matters for the stitch).** The stitch merges when
+cosine > min_similarity. Current osnet_x0_25: same_median 0.705 vs diff_median 0.580 — so the
+0.6 threshold sits between them and **over-merges different people** (the id-50 wrong-re-link /
+dwell-carryover bug). CLIP: same_median 0.694 vs diff_median **0.281** — a threshold ~0.5
+excludes most different-person pairs while keeping most same-person ones: a genuinely usable
+operating point the current model does not offer.
+
+**Asymmetry that decides WHERE to use it.** On the ALL (co-present / occluded) set, CLIP is the
+WORST (margin −0.254) — it is the most occlusion-sensitive. So CLIP helps on CLEAN crops
+(long-gap re-entries, Mode 2) and hurts on OCCLUDED crops (crossings, Mode 1). => Use CLIP in the
+**post-hoc stitch** (main pipeline; end-of-track crops are cleaner), NOT in frame-level
+association. For v2/BoT-SORT (appearance in association on possibly-occluded crops), CLIP is risky.
+
+### Suggestion (honest)
+
+There IS a genuine, evidence-backed improvement available, but bounded:
+- **Swap the post-hoc stitch's ReID backbone from osnet_x0_25 to clip_market1501** (main pipeline).
+  Expected: fewer wrong re-links / dwell-carryover (Mode 2), because CLIP's 3.3x-better median
+  separation lets the merge threshold reject different people the current model waves through.
+- **Realistic expectation, stated plainly:** this REDUCES wrong re-links; it does NOT eliminate ID
+  switches. Crossings (Mode 1) are a tracker/occlusion problem CLIP can't fix (and would worsen if
+  put in association). No backbone gives switch-free tracking on a top-down camera — the tails
+  overlap irreducibly.
+- **VRAM:** CLIP-ReID ~350 MB, still <3% of the 16 GB budget — the headroom is usable.
+- **Cost to verify (needs Colab/T4, per the user's instruction):** (Phase B) run the pipeline on
+  the 3 windows + full video with reid.model=clip_market1501, score wrong-re-link / dwell / purity
+  vs the osnet baseline; (Phase C) measure the T4 FPS hit — CLIP is much slower per crop, but the
+  stitch embeds only in-zone track crops, so it is bounded. Commands provided to the user.
