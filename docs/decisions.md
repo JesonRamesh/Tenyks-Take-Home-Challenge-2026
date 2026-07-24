@@ -1603,3 +1603,49 @@ backbone and no T4:**
 exhausted, but stitch POLICY is an in-scope lever with a measured ~32% dwell-error improvement
 available for free. Out-of-scope options (second camera / overhead-tuned model) remain the only
 path to beating the *count-vs-dwell frontier itself*; within it, the operating point is tunable.
+
+## ReID / ID-switching investigation — consolidated summary and conclusions
+
+A single reference for the write-up, tying together Phase A/B, the root-cause evidence, the
+crossing test and the conservative-stitch result. The question driving it: the pipeline gives
+new people the IDs of people who walked past earlier, corrupting count and dwell — can a stronger
+/ larger-window ReID backbone fix it?
+
+**Answer: no on the backbone; yes on the stitch policy, as a trade.**
+
+1. **The failure has one root cause: camera geometry.** On this top-down camera with a single
+   shared kiosk standing area, two different customers are indistinguishable by BOTH location and
+   appearance. Measured on the full run's own tracks: same-person vs different-person re-link
+   cosine medians 0.640 vs 0.615 (indistinguishable); 99% of different-person pairs sit inside the
+   400px spatial gate; different-person candidates outnumber same-person 5.9:1, so ~84% of pairs
+   clearing the merge gate are different people. This one factor produces every symptom — wrong
+   counts, wrong dwell, and crossing swaps.
+
+2. **A stronger/larger ReID backbone cannot fix it (exhausted avenue).**
+   - Phase A: across 7 backbones from OSNet-x0.25 (2.9 MB) to CLIP-ReID (350 MB), no backbone
+     cleanly separates same from different even on clean solo crops — the top-down viewpoint does
+     not capture the discriminative signal. (The crowded null was partly a co-presence measurement
+     confound, but the clean solo test still showed no clean separation.)
+   - Phase B: replaying the stitch with each backbone, none Pareto-beats the current OSNet — CLIP
+     under-merges (wide same-person pose tail), OSNet-family upgrades shift within noise.
+   - A *larger window* makes it worse, not better: it adds more wrong-merge candidates.
+
+3. **The tracker/architecture does not rescue it either.** v2 (RF-DETR + BoT-SORT) is the better
+   pipeline overall (coverage, matched, dwell) and is what a visual review prefers, but it does
+   NOT reduce crossing swaps — appearance-in-association fails under occlusion (exactly when a
+   crossing needs it). main "avoids" crossings only by under-separating (merging people).
+
+4. **The in-scope lever that DOES help is the stitch policy (not the backbone).** Because ~84% of
+   long-gap merges are wrong, the current aggressive stitch (gap 3000) is net-harmful to dwell. A
+   conservative stitch (gap 900) cut full-video dwell MAPE 26.9% -> 18.4% and MAE 82.9s -> 67.4s
+   with higher purity, at a count cost (+23 -> +60). This is a count-vs-dwell trade on the same
+   frontier — accurate dwell (merge less) OR accurate count (merge more, 84% wrong), not both.
+   It is a one-line config change (`configs/cam1_conservative.yaml`), no backbone, no T4.
+
+5. **Only beating the frontier itself is out of scope:** a second camera angle or an
+   overhead-tuned/re-trained model — i.e. capturing information the current top-down view does not
+   physically contain.
+
+**Status:** a full-video conservative run (gap 900, else identical to the aggressive ROI-fix run)
+is being produced locally for a side-by-side overlay comparison, to distinct output paths so the
+aggressive run is preserved. Numbers + video to be appended when it completes.
