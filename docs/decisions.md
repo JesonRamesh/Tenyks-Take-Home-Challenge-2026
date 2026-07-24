@@ -1483,3 +1483,80 @@ no accuracy, so the estimate is moot.
 sees are a property of the precision/recall frontier on this top-down camera, not a
 backbone-capacity limit — reconfirming, at the operating level, the Phase A finding. The local
 A/B (a ~15-min diagnostic) saved a ~2.5 h T4 run that would not have improved on the current best.
+
+## Mode-1 crossing test + the single root-cause factor (concrete evidence)
+
+### Crossing swaps: v2 vs main — v2 is WORSE, and that is informative
+
+`diagnose_crossing.py` counts crossing swaps from the per-frame artifacts (an id's centroid
+jumping while another track is beside it — a proxy, but symmetric across pipelines). Crowded
+window:
+
+| pipeline | customer tracks | crossing swaps (jump>30px) | per track-min |
+| -------- | --------------- | -------------------------- | ------------- |
+| main (YOLO+ByteTrack) | 5 | 1 | 0.13 |
+| v2 (RF-DETR+BoT-SORT) | 8 | 46 | 3.85 |
+
+This overturns the earlier hypothesis that v2's appearance-in-association would REDUCE
+crossings. It does the opposite, for two compounding reasons:
+1. **main under-separates.** YOLO+NMS merges crossing people into one box, so main tracks only
+   5 people (v2 tracks 8). main has fewer crossing *events* because it loses the second person
+   entirely — its "0-1 swaps" is under-detection, not clean tracking.
+2. **v2's appearance association can't hold IDs apart during a crossing**, because the crops are
+   occluded exactly then, and appearance under occlusion is the weakest case (Phase A: CLIP/OSNet
+   worst on co-present/occluded crops). So BoT-SORT falls back to IoU/motion and swaps.
+
+Neither pipeline solves crossings; they fail differently (main merges, v2 swaps). The cause is
+the same as everything else below.
+
+### THE single factor, with hard evidence from the full run
+
+Question: why do counting and dwell fail, why does "a new person get an old person's id", and
+why wouldn't a better / larger-window ReID fix it? Measured on the full-video run's own
+embeddings (`outputs/colab_full/stitch_state.pkl`, 297 raw tracks, OSNet), over every
+disjoint-in-time re-link candidate pair, labelled same/different by GT:
+
+**1. Appearance does not discriminate identity on this camera.**
+- same-person re-link cosine: median **0.640**; different-person: median **0.615**. A 0.025 gap.
+- At the production merge threshold 0.6: 65% of same-person pairs merge (correct), but **57% of
+  different-person pairs also merge** — a new person taking an old id.
+
+**2. The spatial gate is dead — everyone stands in the same spot.**
+- entry-anchor distance between different-person candidates: median **156px** (same-person 150px —
+  identical). **99%** of different-person pairs fall inside the 400px anchor gate. Because the
+  kiosk queue is one small standing area, location cannot separate a returning customer from a
+  new one.
+
+**3. The base rate makes it unwinnable.** Different-person re-link candidates outnumber same-person
+**5.9 : 1** (25,622 vs 4,316). To avoid wrong merges an appearance filter would have to reject
+>83% of different-person pairs while keeping same-person ones — impossible when their cosine
+medians are 0.640 vs 0.615. **Of all candidate pairs that clear the 0.6 gate, ~84% are different
+people.**
+
+**So the single factor is: on this top-down kiosk camera, two different customers are
+indistinguishable by BOTH location (one shared standing spot) and appearance (the viewpoint
+captures head/shoulders, not discriminative full-body clothing), so the re-link decision is
+near-random.** This one factor produces every symptom:
+- **Counting:** wrong merges (new person → old id, overcount masked) and missed merges (returning
+  person → new id, overcount) — both from the same non-discrimination.
+- **Dwell:** a wrong merge dumps a new person's frames onto an old id (inflated dwell); a missed
+  merge splits one person's visits (fragmented dwell). The 82.9s dwell MAE is this, not a bug.
+- **Crossings:** the same appearance failure, made worse by occlusion.
+
+### Why a better / larger-window ReID backbone cannot fix it — directly refuted
+
+- **Bigger window makes it WORSE, not better.** Widening `gap_frames` adds more candidate old-ids
+  for a new person to be wrongly merged with, and different-person candidates already outnumber
+  same-person 5.9:1 and grow faster with window size. The v2 stitch sweep already showed
+  gap 3000 -> 9000 gave zero count improvement. The window is not the constraint.
+- **Bigger backbone cannot recover information that is not in the crop.** Phase A: no backbone
+  (up to CLIP, 120x larger) separates same from different on clean solo crops — the top-down
+  viewpoint simply does not capture the discriminative signal ReID models rely on. Phase B: no
+  backbone beats the current one at the stitch operating point. The 84% wrong-candidate rate is a
+  property of the pixels, not the model.
+
+**Conclusion for the write-up:** the ID / dwell limitation on this video is a *camera-geometry*
+ceiling — a single shared standing area viewed top-down — not a model-capacity or window-size
+problem. It is quantified (0.640 vs 0.615 cosine; 99% within the spatial gate; 5.9:1 base rate;
+84% of gated merges wrong) and is not addressable by a stronger or larger-window ReID. The
+current pipeline already operates near this ceiling; the honest deliverable is to document it.
